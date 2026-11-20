@@ -45,7 +45,7 @@ class FutaberParityB45Test {
         assertTrue(defaults.extForegroundPatrol)
         assertTrue(defaults.extExternalWatcher)
         // The decision of 2026-10-12: the shared switch is on until someone turns it off.
-        assertTrue(defaults.archiveReportEnabled)
+        assertFalse(defaults.archiveReportEnabled)
         val on = FutaberDisplaySettings.from(
             mapOf(
                 FutaberSettingKeys.EXT_HISTORY_ARCHIVE to "ON",
@@ -63,7 +63,7 @@ class FutaberParityB45Test {
     // ---- W07: when a viewed thread is noted ----
 
     @Test fun aViewedThreadIsNotedOnlyForALiveReadWithTheSwitchOnAndNotOnTheDesktop() {
-        assertTrue(viewedThreadArchiveReportDue(enabledPreference = null, liveFetch = true, desktop = false))
+        assertFalse(viewedThreadArchiveReportDue(enabledPreference = null, liveFetch = true, desktop = false))
         assertTrue(viewedThreadArchiveReportDue(enabledPreference = "ON", liveFetch = true, desktop = false))
         assertFalse(viewedThreadArchiveReportDue(enabledPreference = "OFF", liveFetch = true, desktop = false))
         assertFalse(viewedThreadArchiveReportDue(enabledPreference = null, liveFetch = false, desktop = false))

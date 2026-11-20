@@ -397,7 +397,7 @@ internal fun FutachaThreadFeatureHost(
         FutachaThreadTool(if (extraction == CompatExtractionKind.MANY_REPLIES) "返信抽出を解除" else "しきい値で抽出：返信", Icons.Rounded.Forum) {
             extraction = if (extraction == CompatExtractionKind.MANY_REPLIES) null else CompatExtractionKind.MANY_REPLIES
         },
-        FutachaThreadTool("キャッシュ検索", Icons.Rounded.Search) { cacheSearchOpen = true },
+        FutachaThreadTool("過去スレ検索", Icons.Rounded.Search) { cacheSearchOpen = true },
         FutachaThreadTool("URL・アーカイブ", Icons.Rounded.Link) { urlsOpen = true },
         FutachaThreadTool("表示・抽出の詳細設定", Icons.Rounded.Settings) { features.openSettings("thread") },
         FutachaThreadTool("スレッドを閉じる", Icons.Rounded.Close) { closeTab(tabKey) }

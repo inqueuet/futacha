@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.ui.compat
 
 import com.valoser.futacha.shared.ui.board.VideoPlaybackOptions
+import com.valoser.futacha.shared.ui.board.VideoPlayerState
 import com.valoser.futacha.shared.ui.board.platformVideoAutoPlayByDefault
 
 /** 参考アプリ 18-20's viewer settings (設定 → 画像ビューア → 閲覧). */
@@ -52,3 +53,15 @@ internal fun compatViewerBehaviour(
         )
     )
 }
+
+/** aimg seq46: hide the video's panel and bars [autoHideMillis] after playback starts, only while ON (> 0). */
+internal fun compatViewerShouldAutoHideVideoChrome(
+    isCurrentPage: Boolean,
+    state: VideoPlayerState,
+    chromeVisible: Boolean,
+    autoHideMillis: Int
+): Boolean = isCurrentPage && chromeVisible && autoHideMillis > 0 && state == VideoPlayerState.Ready
+
+/** aimg seq46: offer the 90° button for landscape videos (and always while rotated, to turn back). */
+internal fun compatShowVideoRotateButton(canRotate: Boolean, size: Pair<Int, Int>?, rotated: Boolean): Boolean =
+    canRotate && (rotated || (size != null && size.first > size.second))

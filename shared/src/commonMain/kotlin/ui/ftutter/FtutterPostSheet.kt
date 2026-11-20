@@ -69,6 +69,9 @@ internal fun ftutterPostFailureToast(error: Throwable): FtutterPostToast {
 
 /** 原作の添付で選べる形式（M89。Dartの`file_picker`の FileType.custom）。 */
 internal val FTUTTER_ATTACHMENT_EXTENSIONS = listOf("jpg", "jpeg", "png", "gif", "webp", "mp4", "webm")
+// 選択画面に出す形式（拡張子の決まりと同じもの）。
+internal const val FTUTTER_ATTACHMENT_IMAGE_TYPES = "image/jpeg,image/png,image/gif,image/webp"
+internal const val FTUTTER_ATTACHMENT_VIDEO_TYPES = "video/mp4,video/webm"
 internal const val FTUTTER_ATTACHMENT_EXTENSION_REFUSED = "jpg・jpeg・png・gif・webp・mp4・webmのファイルを選んでください"
 
 internal fun ftutterAttachmentExtensionAllowed(fileName: String): Boolean {

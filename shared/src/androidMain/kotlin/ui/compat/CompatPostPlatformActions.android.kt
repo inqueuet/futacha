@@ -464,3 +464,9 @@ private tailrec fun Context.findCompatPostActivity(): Activity? = when (this) {
     is ContextWrapper -> baseContext.findCompatPostActivity()
     else -> null
 }
+
+
+internal actual val compatCanForceLandscape: Boolean = true
+
+@Composable
+internal actual fun CompatVideoLandscapeEffect() = CompatDrawingLandscapeEffect()

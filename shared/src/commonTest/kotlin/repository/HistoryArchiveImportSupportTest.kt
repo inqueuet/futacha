@@ -7,13 +7,20 @@ import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.SavedThreadIndex
 import com.valoser.futacha.shared.model.SavedThreadMetadata
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.state.AppStateStore
+import com.valoser.futacha.shared.state.FakePlatformStateStorage
+import com.valoser.futacha.shared.state.importAppHistoryArchive
 import com.valoser.futacha.shared.state.resolveHistoryArchiveImportMergeEntries
+import com.valoser.futacha.shared.util.FileReadSource
+import com.valoser.futacha.shared.util.FileSystem
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class HistoryArchiveImportSupportTest {
@@ -55,6 +62,42 @@ class HistoryArchiveImportSupportTest {
                 "$IMPORTED_HISTORY_DIRECTORY/${importedThread.storageId}/src/1.jpg"
             ).getOrThrow().toList()
         )
+
+        importHistoryArchive(
+            fileSystem = fileSystem,
+            destinationRepository = importedRepository,
+            request = HistoryArchiveImportRequest(export.archiveDirectory)
+        ).getOrThrow()
+        val revision = importedRepository.getAllThreads().single()
+        assertTrue(revision.storageId != importedThread.storageId)
+        assertFalse(fileSystem.exists("$IMPORTED_HISTORY_DIRECTORY/${importedThread.storageId}/metadata.json"))
+    }
+
+    @Test
+    fun cancelledImportKeepsCompletedSnapshotsAndHistoryTogether() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val first = seedSavedThread(fileSystem, threadId = "123")
+        val second = seedSavedThread(fileSystem, threadId = "456")
+        val export = exportHistoryArchive(
+            fileSystem,
+            listOf(first, second),
+            HistoryArchiveExportRequest("interrupted", listOf(historyEntry("123", 1), historyEntry("456", 2)), 10L)
+        ).getOrThrow()
+        val laterMetadata = export.manifest.entries.last().metadataPath
+        assertTrue(laterMetadata != null)
+        val interrupted = object : FileSystem by fileSystem {
+            override suspend fun <T> readByteStream(path: String, block: suspend (FileReadSource) -> T): Result<T> {
+                if (path == "${export.archiveDirectory}/$laterMetadata") throw CancellationException("test")
+                return fileSystem.readByteStream(path, block)
+            }
+        }
+        val historyStore = AppStateStore(FakePlatformStateStorage())
+        val saved = SavedThreadRepository(fileSystem, baseDirectory = IMPORTED_HISTORY_DIRECTORY)
+        assertFailsWith<CancellationException> {
+            importAppHistoryArchive(historyStore, interrupted, saved, export.archiveDirectory)
+        }
+        assertEquals(listOf("123"), saved.getAllThreads().map { it.threadId })
+        assertEquals(listOf("123"), historyStore.readHistory().map { it.threadId })
     }
 
     @Test

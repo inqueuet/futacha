@@ -1562,6 +1562,27 @@ class FutachaAppTest {
     }
 
     @Test
+    fun resolveFutachaThreadDeepLink_opensAnAimogeThreadOnItsRegisteredBoard() {
+        val previous = com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled
+        com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled = true
+        try {
+            val board = board(id = "aimoge-aimg").copy(name = "二次元裏", url = "https://nijiurachan.net/b/aimg/")
+            val uuid = "01a1ec77-e5c3-77af-aa69-5c17dac1aad4"
+            val open = assertIs<FutachaThreadDeepLinkResolution.Open>(
+                resolveFutachaThreadDeepLink("https://nijiurachan.net/b/aimg/thread/$uuid", listOf(board), emptyList())
+            )
+            assertEquals("aimoge-aimg", open.selection.boardId)
+            assertEquals(uuid, open.selection.threadId)
+            assertEquals("https://nijiurachan.net/b/aimg/thread/$uuid", open.selection.threadUrl)
+            assertIs<FutachaThreadDeepLinkResolution.UnregisteredBoard>(
+                resolveFutachaThreadDeepLink("https://nijiurachan.net/b/other/thread/$uuid", listOf(board), emptyList())
+            )
+        } finally {
+            com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled = previous
+        }
+    }
+
+    @Test
     fun applyRegisteredThreadNavigation_switchesBoardAndClearsThreadDecorations() {
         val base = FutachaNavigationState(
             selectedBoardId = "old",

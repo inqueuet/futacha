@@ -608,3 +608,20 @@ private class IosCompatSpeechSession {
 
 private const val IOS_SPEECH_NOT_DETERMINED = 0L
 private const val IOS_SPEECH_AUTHORIZED = 3L
+
+
+internal actual val compatCanForceLandscape: Boolean = true
+
+private fun postIosVideoLandscape(on: Boolean) {
+    platform.Foundation.NSNotificationCenter.defaultCenter.postNotificationName(
+        aName = "com.valoser.futacha.video-landscape-lock", `object` = null, userInfo = mapOf("landscape" to on)
+    )
+}
+
+@Composable
+internal actual fun CompatVideoLandscapeEffect() {
+    DisposableEffect(Unit) {
+        postIosVideoLandscape(true)
+        onDispose { postIosVideoLandscape(false) }
+    }
+}

@@ -375,13 +375,14 @@ internal suspend fun dismissHistoryEntries(
     importedHistoryRepository: SavedThreadRepository? = null,
     compatibilityStore: CompatibilityStore? = null,
     entries: Collection<ThreadHistoryEntry>,
+    removeFromState: Boolean = true,
     onAutoSavedThreadDeleteFailure: (Throwable) -> Unit = {}
 ) {
     if (entries.isEmpty()) return
     // Once started it goes to the end (re-audit M27: cancelled half way, the other modes' rows were gone and this
     // mode's stayed), and each store is written once, not once per row.
     withContext(NonCancellable) {
-        stateStore.removeHistoryEntries(entries)
+        if (removeFromState) stateStore.removeHistoryEntries(entries)
         if (compatibilityStore != null) {
             // Every row asked for, not only those the shared store holds now (audit F3): a copy read before this
             // deletion must not bring the others back there.

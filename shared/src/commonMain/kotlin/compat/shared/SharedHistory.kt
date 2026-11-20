@@ -84,8 +84,12 @@ suspend fun synchronizeSharedHistory(
  * history gets the rows at once, a row deleted earlier included (the person chose to restore it). The continuous copy
  * above skips a row deleted earlier, as it must for an old copy.
  */
-suspend fun mergeRestoredHistoryIntoAppState(compatibilityStore: CompatibilityStore, stateStore: AppStateStore) {
-    val compatHistory = compatibilityStore.history.first()
+suspend fun mergeRestoredHistoryIntoAppState(
+    compatibilityStore: CompatibilityStore,
+    stateStore: AppStateStore,
+    restoredUrls: Set<String>
+) {
+    val compatHistory = compatibilityStore.history.first().filter { it.canonicalUrl in restoredUrls }
     if (compatHistory.isEmpty()) return
     val boards = stateStore.boards.first()
     stateStore.restoreHistory { current -> mergeCompatibilityHistory(current, compatHistory, boards) }

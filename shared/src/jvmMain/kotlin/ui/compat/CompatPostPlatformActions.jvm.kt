@@ -289,3 +289,9 @@ internal fun requireCompatImagePixels(bytes: ByteArray, maximum: Long) {
     val size = compatPostImageDimensions(bytes) ?: return
     require(size.first.toLong() * size.second <= maximum) { "画像が大きすぎます" }
 }
+
+
+internal actual val compatCanForceLandscape: Boolean = false
+
+@androidx.compose.runtime.Composable
+internal actual fun CompatVideoLandscapeEffect() = Unit

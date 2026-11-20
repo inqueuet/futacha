@@ -562,11 +562,15 @@ internal fun FtutterThreadScreen(
     }
     DisposableEffect(ref.threadId) { onDispose { storeOnLeave() } }
 
+    val searchJumpState = com.valoser.futacha.shared.ui.board.LocalThreadSearchJumpState.current
     val initialRefreshSignal = remember(board.id, ref.threadId) { refreshSignal }
     LaunchedEffect(board.id, ref.threadId, refreshTick, refreshSignal) {
         val held = page
-        if (held != null && !ftutterThreadPageIsStale(held, history) && !refreshOnOpen &&
-            refreshTick == 0 && refreshSignal == initialRefreshSignal) {
+        val requestedPostMissingFromCache = searchJumpState?.pending
+            ?.takeIf { it.matches(ftutterThreadUrl(board, ref.threadId)) }
+            ?.let { request -> held?.posts?.none(request::matchesPost) == true } == true
+        if (held != null && !requestedPostMissingFromCache && !ftutterThreadPageIsStale(held, history) &&
+            !refreshOnOpen && refreshTick == 0 && refreshSignal == initialRefreshSignal) {
             loading = false
             return@LaunchedEffect
         }
@@ -674,6 +678,21 @@ internal fun FtutterThreadScreen(
             if (highlight == index) highlight = null
         }
     }
+    com.valoser.futacha.shared.ui.board.ThreadSearchJumpEffect(
+        threadUrl = { ftutterThreadUrl(board, ref.threadId) },
+        rows = rows,
+        ready = { !loading && view?.posts === loadedPosts && (restored || rows.isEmpty()) },
+        onUnavailable = { onNotice(com.valoser.futacha.shared.ui.board.THREAD_SEARCH_JUMP_UNAVAILABLE) },
+        matchesPost = { request, row ->
+            val ordinal = when (row) {
+                is FtutterRow.PostRow -> row.index
+                is FtutterRow.HiddenRow -> row.index
+                else -> -1
+            }
+            posts.getOrNull(ordinal)?.let(request::matchesPost) == true
+        },
+        onJump = { listState.requestScrollToItem(it) }
+    )
     fun refresh(fromBottom: Boolean) {
         if (fromBottom) {
             // 下へ引っ張る更新は、既読を最後まで進めてから取る（原作の saveKokomadeLast）。
@@ -1640,6 +1659,11 @@ private fun FtutterPostBody(
                     }
                 }
             }
+            com.valoser.futacha.shared.network.aimoge.aimogePollOptionLinks(post.messageHtml, lines.joinToString("\n"))
+                .forEach { (range, url) ->
+                    addStringAnnotation("poll", url, range.first, range.last + 1)
+                    addStyle(SpanStyle(color = colors.link), range.first, range.last + 1)
+                }
         }
     }
     if (cached == null) androidx.compose.runtime.SideEffect { FtutterBodyCache.put(bodyKey, lines to base) }
@@ -1682,7 +1706,10 @@ private fun FtutterPostBody(
                             return@detectTapGestures
                         }
                         val quote = offset?.let { text.getStringAnnotations("quote", it, it).firstOrNull() }
-                        val url = offset?.let { text.getStringAnnotations("url", it, it).firstOrNull() }
+                        val url = offset?.let {
+                            text.getStringAnnotations("poll", it, it).firstOrNull()
+                                ?: text.getStringAnnotations("url", it, it).firstOrNull()
+                        }
                         val top = coords[0]?.takeIf { it.isAttached }?.let { c ->
                             val lineIndex = layout?.getLineForOffset(offset ?: 0) ?: 0
                             c.localToRoot(Offset(0f, layout?.getLineTop(lineIndex) ?: 0f)).y

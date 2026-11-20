@@ -602,8 +602,8 @@ internal fun HistoryArchiveActionDialog(
     trackAnalytics: Boolean = true
 ) {
     val title = if (action == HistoryArchiveAction.Export) "履歴エクスポート" else "履歴インポート"
-    val allLabel = if (action == HistoryArchiveAction.Export) "すべてエクスポート" else "すべてインポート"
-    val selectedLabel = if (action == HistoryArchiveAction.Export) "選択してエクスポート" else "選択してインポート"
+    val allLabel = if (action == HistoryArchiveAction.Export) "最新${com.valoser.futacha.shared.repository.MAX_HISTORY_ARCHIVE_ENTRIES}件までエクスポート" else "すべてインポート"
+    val selectedLabel = if (action == HistoryArchiveAction.Export) "選択してエクスポート（最大${com.valoser.futacha.shared.repository.MAX_HISTORY_ARCHIVE_ENTRIES}件）" else "選択してインポート"
     FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = {
             historyArchiveUiControl(trackAnalytics, "history_archive_dialog", "履歴アーカイブ選択を閉じる")
@@ -626,7 +626,7 @@ internal fun HistoryArchiveActionDialog(
                         historyArchiveUiControl(trackAnalytics, "history_archive_dialog", "履歴をエクスポートして全削除")
                         onExportThenClearClick()
                     }) {
-                        Text("エクスポートして一括削除")
+                        Text("全件を書き出せる場合に一括削除")
                     }
                 }
                 TextButton(onClick = {

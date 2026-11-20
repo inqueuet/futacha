@@ -26,6 +26,15 @@ class CompatTabTrimmingTest {
     )
 
     @Test
+    fun explicitlyProtectedTabsStayWhenOldTabsAreTrimmed() {
+        val tabs = (1..25).map { tab(it) }
+        val limit = mapOf(COMPAT_SHARED_TAB_LIMIT_KEY to "20")
+        val protection = compatTabProtectionKey("tab-1")
+        assertTrue(trimCompatTabs(tabs, null, limit + (protection to "ON")).any { it.key == "tab-1" })
+        assertTrue(trimCompatTabs(tabs, null, limit + (protection to "OFF")).none { it.key == "tab-1" })
+    }
+
+    @Test
     fun upToTheLimitNothingIsRemovedAndTabsAreNewestFirst() {
         val tabs = (1..COMPAT_SHARED_TAB_LIMIT_DEFAULT).map { tab(it) }.shuffled()
         val trimmed = trimCompatTabs(tabs, activeTabKey = null)

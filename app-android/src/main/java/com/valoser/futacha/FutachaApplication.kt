@@ -312,7 +312,9 @@ class FutachaApplication : Application() {
             // outbox scan can compete with Compose's initial measure/draw on
             // compact devices, so leave the UI a quiet startup window.
             delay(STARTUP_ARCHIVE_REPORT_DELAY_MILLIS)
-            ArchiveReportWorker.enqueueStartup(applicationContext)
+            if (compatibilityStore.loadPreference(com.valoser.futacha.shared.compat.ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY) == "ON") {
+                ArchiveReportWorker.enqueueStartup(applicationContext)
+            }
         }
 
         applicationScope.launch {

@@ -10,6 +10,8 @@ import com.valoser.futacha.shared.network.aimoge.AimogeNotices
 import com.valoser.futacha.shared.network.aimoge.AimogePollLinks
 import com.valoser.futacha.shared.network.aimoge.AimogePromptRequest
 import com.valoser.futacha.shared.network.aimoge.AimogePrompts
+import com.valoser.futacha.shared.network.aimoge.AimogeReplyRequest
+import com.valoser.futacha.shared.network.aimoge.AimogeWriteOutcome
 import com.valoser.futacha.shared.network.aimoge.AimogeRequestLedger
 import com.valoser.futacha.shared.network.aimoge.AimogeSecretStorage
 import com.valoser.futacha.shared.network.aimoge.AimogeWriteApi
@@ -23,7 +25,9 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.OutgoingContent
 import io.ktor.http.headersOf
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -61,6 +65,7 @@ private class Memory(var text: String? = null) : AimogeSecretStorage {
 class AimogeWriteFlowTest {
     private val requests = mutableListOf<HttpRequestData>()
     private val bodies = mutableListOf<String>()
+    private var beforePost: suspend () -> Unit = {}
     private var postStatus = HttpStatusCode.Created
     private var postBody = """{"threadId":"$WTHREAD","postId":"$OP_UUID","seq":0,"status":"public"}"""
     private var threadJson = AimogeFixtures.THREAD
@@ -89,7 +94,10 @@ class AimogeWriteFlowTest {
             path == "/altcha" -> respond(altcha, HttpStatusCode.OK, json)
             path.startsWith("/threads/") && path.endsWith("/state") -> respond(stateJson, HttpStatusCode.OK, json)
             path.startsWith("/thread/") -> respond(threadJson, HttpStatusCode.OK, json)
-            path.endsWith("/posts") && request.method == HttpMethod.Post -> respond(postBody, postStatus, json)
+            path.endsWith("/posts") && request.method == HttpMethod.Post -> {
+                beforePost()
+                respond(postBody, postStatus, json)
+            }
             path.endsWith("/poll/vote") -> respond(
                 """{"isClosed":false,"selectedOptionId":"o1","results":{"totalVotes":1,"options":[{"optionId":"o1","voteCount":1}]}}""",
                 voteStatus, json
@@ -143,6 +151,42 @@ class AimogeWriteFlowTest {
         assertEquals("100493594", number)
         assertEquals(1, sent("/posts").size)
         assertTrue(durable!!.contains("requestId"), "the original durable id stays available for idempotent recovery")
+    }
+
+    @Test
+    fun cancellingTheScreenDoesNotReleaseTheSendLock() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        beforePost = { entered.complete(Unit); finish.await() }
+        val writer = repo(Memory(secrets(consented = true))).writerOverride!!
+        val request = AimogeReplyRequest("ai2", WTHREAD, "本文")
+        val waitingScreen = async { writer.reply(request) }
+        try {
+            entered.await()
+            waitingScreen.cancelAndJoin()
+            assertEquals(1, writer.heldKeyLockCount())
+            assertTrue(writer.reply(request) is AimogeWriteOutcome.Refused)
+            assertEquals(1, sent("/posts").size)
+        } finally {
+            finish.complete(Unit)
+            withContext(Dispatchers.Default) {
+                kotlinx.coroutines.withTimeout(5_000) {
+                    while (writer.heldKeyLockCount() != 0) kotlinx.coroutines.delay(10)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun aRecordedReplyCanBeResentWithTheSameId() = runTest {
+        val writer = repo(Memory(secrets(consented = true))).writerOverride!!
+        postBody = "{}"
+        assertTrue(writer.reply(AimogeReplyRequest("ai2", WTHREAD, "本文")) is AimogeWriteOutcome.Unconfirmed)
+        postBody = """{"threadId":"$WTHREAD","postId":"$OP_UUID","seq":0}"""
+        assertTrue(writer.resendRecorded("ai2", WTHREAD) is AimogeWriteOutcome.Posted)
+        val ids = sent("/posts").map { Json.parseToJsonElement(bodies[it]).jsonObject["requestId"] }
+        assertEquals(2, ids.size)
+        assertEquals(ids.first(), ids.last())
     }
 
     @Test
@@ -263,8 +307,20 @@ class AimogeWriteFlowTest {
         val link = "$AIMOGE_POLL_LINK_PREFIX$OP_UUID/o1"
         assertTrue(link in html)
         assertEquals(OP_UUID to "o1", AimogePollLinks.parse(link))
-        val message = withContext(Dispatchers.Default) { AimogePollLinks.handler!!(OP_UUID, "o1") }
-        assertEquals(AIMOGE_POLL_VOTED_MESSAGE, message)
+        AimogePrompts.attachHost()
+        try {
+            for (confirm in listOf(false, true)) {
+                val vote = CoroutineScope(Dispatchers.Default).async { AimogePollLinks.handler!!(OP_UUID, "o1") }
+                val (prompt, answer) = AimogePrompts.current.filterNotNull().first()
+                assertEquals(AimogePromptRequest.Confirm("「はい」に投票しますか？"), prompt)
+                assertTrue(requests.none { it.url.encodedPath.endsWith("/poll/vote") })
+                answer.complete(confirm)
+                val result = vote.await()
+                if (confirm) assertEquals(AIMOGE_POLL_VOTED_MESSAGE, result)
+            }
+        } finally {
+            AimogePrompts.detachHost()
+        }
         val vote = requests.single { it.url.encodedPath.endsWith("/poll/vote") }
         assertEquals(KEY, vote.headers["x-aimg-delete-key"])
         assertNull(AimogePollLinks.parse("https://nijiurachan.net/b/ai2/"))

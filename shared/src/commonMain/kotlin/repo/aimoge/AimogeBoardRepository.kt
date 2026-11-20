@@ -796,6 +796,12 @@ class AimogeBoardRepository private constructor(
         val held = mutex.withLock { threads.entries.firstOrNull { postId in it.value.postUuids.values } }
             ?: return AIMOGE_POLL_UNAVAILABLE_MESSAGE
         val slug = held.value.slug
+        val option = held.value.posts.firstOrNull { it.id == postId }
+            ?.poll?.options?.firstOrNull { it.id == optionId }
+            ?: return AIMOGE_POLL_UNAVAILABLE_MESSAGE
+        if (!AimogePrompts.ask(AimogePromptRequest.Confirm("「${option.label}」に投票しますか？"))) {
+            return "アンケートの回答を取り消しました"
+        }
         var message = AIMOGE_POLL_VOTED_MESSAGE
         val outcome = withPrompts(
             needsConsent = { (it as? AimogePollOutcome.Other)?.outcome == AimogeActionOutcome.NeedsConsent },

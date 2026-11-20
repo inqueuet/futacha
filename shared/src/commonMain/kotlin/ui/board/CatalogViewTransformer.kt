@@ -6,7 +6,7 @@ import com.valoser.futacha.shared.model.CatalogPageContent
 import com.valoser.futacha.shared.model.mergePageParseWarnings
 import com.valoser.futacha.shared.model.matchesNormalizedWatchWords
 import com.valoser.futacha.shared.model.normalizeWatchWords
-import com.valoser.futacha.shared.model.normalizeWatchSearchText
+import com.valoser.futacha.shared.model.normalizeCatalogNgText
 import com.valoser.futacha.shared.model.normalizeCatalogSearchText
 import com.valoser.futacha.shared.model.numericId
 import com.valoser.futacha.shared.util.hasEpochIntervalElapsed
@@ -77,7 +77,7 @@ private fun List<CatalogItem>.toCatalogFilterCandidates(): List<CatalogFilterCan
     return map { item ->
         CatalogFilterCandidate(
             item = item,
-            normalizedTitle = normalizeWatchSearchText(item.title.orEmpty()),
+            normalizedTitle = normalizeCatalogSearchText(item.title.orEmpty()),
             normalizedId = item.id.lowercase(),
             normalizedThreadUrl = item.threadUrl.lowercase()
         )
@@ -94,7 +94,7 @@ private fun normalizeCatalogFilterWords(
 ): List<String> {
     if (!enabled) return emptyList()
     return words
-        .mapNotNull { normalizeWatchSearchText(it).takeIf(String::isNotBlank) }
+        .mapNotNull { normalizeCatalogNgText(it).takeIf(String::isNotBlank) }
         .distinct()
 }
 
@@ -163,8 +163,9 @@ private fun List<CatalogFilterCandidate>.filterByCatalogNgWords(
 private fun CatalogFilterCandidate.matchesCatalogNgWords(
     normalizedCatalogNgWords: List<String>
 ): Boolean {
-    if (normalizedTitle.isEmpty()) return false
-    return normalizedCatalogNgWords.any { normalizedTitle.contains(it) }
+    val title = normalizeCatalogNgText(item.title.orEmpty())
+    if (title.isEmpty()) return false
+    return normalizedCatalogNgWords.any { title.contains(it) }
 }
 
 private fun List<CatalogFilterCandidate>.filterByNormalizedQuery(
@@ -229,7 +230,7 @@ internal fun List<CatalogItem>.filterByCatalogNgWords(
 ): List<CatalogItem> {
     if (!enabled) return this
     val wordFilters = catalogNgWords
-        .mapNotNull { normalizeWatchSearchText(it).takeIf(String::isNotBlank) }
+        .mapNotNull { normalizeCatalogNgText(it).takeIf(String::isNotBlank) }
     if (wordFilters.isEmpty()) return this
     return filterNot { item ->
         matchesCatalogNgWords(item, wordFilters)
@@ -240,7 +241,7 @@ internal fun matchesCatalogNgWords(
     item: CatalogItem,
     wordFilters: List<String>
 ): Boolean {
-    val titleText = normalizeWatchSearchText(item.title.orEmpty())
+    val titleText = normalizeCatalogNgText(item.title.orEmpty())
     if (titleText.isEmpty()) return false
     return wordFilters.any { titleText.contains(it) }
 }

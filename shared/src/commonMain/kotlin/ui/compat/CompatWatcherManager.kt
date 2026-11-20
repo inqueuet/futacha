@@ -82,7 +82,10 @@ internal fun CompatWatcherManager(
                 Row {
                     Checkbox(preferences[COMPAT_WATCH_WIFI_KEY] == "ON", enabled = !busy,
                         onCheckedChange = { runAction { store.savePreference(COMPAT_WATCH_WIFI_KEY, if (it) "ON" else "OFF") } })
-                    Text("自動巡回はWi-Fi接続時のみ")
+                    Text("自動巡回は従量制でない回線のみ")
+                }
+                if (preferences[COMPAT_WATCH_WIFI_KEY] == "ON") {
+                    Text("回線を判別できない場合は自動巡回しません。", style = MaterialTheme.typography.bodySmall)
                 }
                 TextField(word, { word = it.take(100) }, label = { Text("キーワード") }, singleLine = true)
                 Row {

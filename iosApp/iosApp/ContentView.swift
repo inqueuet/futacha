@@ -558,6 +558,7 @@ private final class FutachaComposeHostViewController: UIViewController {
     private var systemBarColor = UIColor.black
     /// L-B11 (C28): the ふたばー風 picture list / viewer asks to be held upright; nothing else posts this.
     private var portraitLocked = false
+    private var landscapeLocked = false
     private var observers: [NSObjectProtocol] = []
 
     init(content: UIViewController) {
@@ -599,6 +600,25 @@ private final class FutachaComposeHostViewController: UIViewController {
                 UIViewController.attemptRotationToDeviceOrientation()
             }
         })
+        // aimg seq46: the としあき(仮) viewer's 90° button turns the screen landscape for a wide video.
+        observers.append(center.addObserver(
+            forName: Notification.Name("com.valoser.futacha.video-landscape-lock"),
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self, let on = (notification.userInfo?["landscape"] as? NSNumber)?.boolValue else { return }
+            self.landscapeLocked = on
+            if #available(iOS 16.0, *) {
+                self.setNeedsUpdateOfSupportedInterfaceOrientations()
+                self.view.window?.windowScene?.requestGeometryUpdate(
+                    .iOS(interfaceOrientations: on ? .landscapeRight : .portrait)) { _ in }
+            } else {
+                UIDevice.current.setValue(
+                    (on ? UIInterfaceOrientation.landscapeRight : UIInterfaceOrientation.portrait).rawValue,
+                    forKey: "orientation")
+                UIViewController.attemptRotationToDeviceOrientation()
+            }
+        })
     }
 
     required init?(coder: NSCoder) {
@@ -622,6 +642,7 @@ private final class FutachaComposeHostViewController: UIViewController {
 
     /// The Info.plist's own list (iPhone: upright and both sides; iPad: all four) unless the viewer asked to be upright.
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
+        if landscapeLocked { return .landscape }
         if portraitLocked { return .portrait }
         return UIDevice.current.userInterfaceIdiom == .pad ? .all : .allButUpsideDown
     }

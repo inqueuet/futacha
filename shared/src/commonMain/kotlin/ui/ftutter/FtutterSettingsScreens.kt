@@ -72,7 +72,7 @@ internal fun FtutterTwoPane(
 }
 
 @Composable
-private fun FtutterCheckRow(label: String, checked: Boolean, tag: String, onChange: (Boolean) -> Unit) {
+internal fun FtutterCheckRow(label: String, checked: Boolean, tag: String, onChange: (Boolean) -> Unit) {
     val colors = LocalFtutterColors.current
     Row(
         Modifier.fillMaxWidth().clickable { onChange(!checked) }.padding(horizontal = 8.dp).testTag(tag),

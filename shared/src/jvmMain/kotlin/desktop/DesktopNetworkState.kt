@@ -4,15 +4,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
 
-/**
- * Desktop connections count as unmetered (the "Wi-Fi only" settings allow them)
- * unless the default route positively goes through a tethered phone, modem or
- * cellular port. Wired LAN, Wi-Fi and VPNs are unmetered; so is an unknown
- * state, which also covers the time before the first probe. Windows has no
- * cheap metered-connection query here and is treated as unmetered.
- */
+/** Recognizes unmetered Mac hardware ports. Unknown connections are excluded from automatic work. */
 internal object DesktopNetworkState {
-    @Volatile var unmetered = true
+    @Volatile var unmetered = false
         private set
     @Volatile private var refreshedAtNanos: Long? = null
 
@@ -24,12 +18,12 @@ internal object DesktopNetworkState {
 
     suspend fun refresh() = withContext(Dispatchers.IO) {
         unmetered = runCatching {
-            if (DesktopPlatform.isWindows) return@runCatching true
+            if (DesktopPlatform.isWindows) return@runCatching false
             val device = desktopDefaultRouteInterface(query("/sbin/route", "-n", "get", "default").orEmpty())
-                ?: return@runCatching true
+                ?: return@runCatching false
             val port = desktopHardwarePortName(query("/usr/sbin/networksetup", "-listallhardwareports").orEmpty(), device)
-            !isMeteredDesktopHardwarePort(port)
-        }.getOrDefault(true)
+            port != null && !isMeteredDesktopHardwarePort(port)
+        }.getOrDefault(false)
         refreshedAtNanos = System.nanoTime()
     }
 

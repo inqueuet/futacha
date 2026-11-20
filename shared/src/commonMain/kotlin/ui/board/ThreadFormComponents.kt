@@ -165,6 +165,13 @@ internal fun ThreadFormDialog(
             }
         }
     }
+    var videoUploadInProgress by remember { mutableStateOf(false) }
+    fun clearForm() {
+        if (videoUploadInProgress) return
+        cancelAttachmentProcessing()
+        onClear()
+    }
+    val dismissAfterUpload = { if (!videoUploadInProgress) onDismiss() }
     fun selectAttachment(image: ImageData?) {
         cancelAttachmentProcessing()
         onImageSelected(image)
@@ -218,14 +225,20 @@ internal fun ThreadFormDialog(
     pendingUps?.let { (video, question) -> FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { pendingUps = null },
         title = { Text(com.valoser.futacha.shared.ui.compat.COMPAT_VIDEO_UPS_TITLE) }, text = { Text(question) },
         confirmButton = { TextButton(modifier = Modifier.testTag("futacha-video-ups-ok"), onClick = {
+            if (videoUploadInProgress) return@TextButton
             pendingUps = null
             val features = sharedFeatures
             val client = features?.httpClient
             val key = features?.preferences?.compatStoredPostDeleteKey().orEmpty().ifBlank { password }
+            videoUploadInProgress = true
             scope.launch {
-                attachmentProcessingError = com.valoser.futacha.shared.ui.compat.uploadCompatVideoToUps(video,
-                    client?.let { c -> { v -> com.valoser.futacha.shared.ui.compat.uploadCompatUps(c, v, "", key, features.appVersion).getOrThrow() } },
-                    appendName = { latestCommentChange(com.valoser.futacha.shared.ui.compat.appendCompatPostText(latestComment, it)) })
+                try {
+                    attachmentProcessingError = com.valoser.futacha.shared.ui.compat.uploadCompatVideoToUps(video,
+                        client?.let { c -> { v -> com.valoser.futacha.shared.ui.compat.uploadCompatUps(c, v, "", key, features.appVersion).getOrThrow() } },
+                        appendName = { latestCommentChange(com.valoser.futacha.shared.ui.compat.appendCompatPostText(latestComment, it)) })
+                } finally {
+                    videoUploadInProgress = false
+                }
             }
         }) { Text("OK") } }, dismissButton = { TextButton(onClick = { pendingUps = null }) { Text("キャンセル") } }) } }
     pendingCompression?.let { image -> FutachaAppLockAwareWindow { AlertDialog(onDismissRequest = { pendingCompression = null },
@@ -279,7 +292,7 @@ internal fun ThreadFormDialog(
     var overflowMenuExpanded by remember { mutableStateOf(false) }
 
     FutachaAppLockAwareWindow { Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = dismissAfterUpload,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         ProvideThreadTextSizeTypography(bodyTextSize) {
@@ -313,7 +326,7 @@ internal fun ThreadFormDialog(
                     navigationIcon = {
                         IconButton(onClick = {
                             AnalyticsTracker.uiControl("thread_form_back", "投稿フォームを閉じる")
-                            onDismiss()
+                            dismissAfterUpload()
                         }) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
@@ -343,7 +356,7 @@ internal fun ThreadFormDialog(
                                 onClick = {
                                     AnalyticsTracker.uiControl("thread_form_cancel", "投稿フォームをキャンセル")
                                     overflowMenuExpanded = false
-                                    onDismiss()
+                                    dismissAfterUpload()
                                 }
                             )
                         }
@@ -609,9 +622,9 @@ internal fun ThreadFormDialog(
                             onCommentChange = onCommentChange, password = password,
                             onImageSelected = ::acceptPickedImage, onChooseImage = { chooseNormalAttachment(imagePickerLauncher) },
                             onChooseVideo = { chooseNormalAttachment(videoPickerLauncher) },
-                            onPasteImage = { chooseNormalAttachment(clipboardPaste.paste) }, onSubmit = onSubmit,
-                            onClear = { cancelAttachmentProcessing(); onClear() }, onDismiss = onDismiss,
-                            enabled = attachmentsEnabled && !isSanitizingAttachment && !clipboardPaste.busy,
+                            onPasteImage = { chooseNormalAttachment(clipboardPaste.paste) }, onSubmit = { if (!videoUploadInProgress) onSubmit() },
+                            onClear = ::clearForm, onDismiss = dismissAfterUpload,
+                            enabled = attachmentsEnabled && !isSanitizingAttachment && !clipboardPaste.busy && !videoUploadInProgress,
                             attachmentEnabled = !isSanitizingAttachment && !clipboardPaste.busy,
                             attachmentPickerPreference = attachmentPickerPreference,
                             preferredFileManagerPackage = preferredFileManagerPackage,
@@ -630,9 +643,9 @@ internal fun ThreadFormDialog(
                         IconButton(
                             onClick = {
                                 AnalyticsTracker.uiControl("thread_form_submit", sendDescription)
-                                onSubmit()
+                                if (!videoUploadInProgress) onSubmit()
                             },
-                            enabled = attachmentsEnabled && !isSanitizingAttachment && !clipboardPaste.busy
+                            enabled = attachmentsEnabled && !isSanitizingAttachment && !clipboardPaste.busy && !videoUploadInProgress
                         ) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Rounded.Send,
@@ -662,9 +675,8 @@ internal fun ThreadFormDialog(
                         }
                         IconButton(onClick = {
                             AnalyticsTracker.uiControl("thread_form_clear", "投稿フォームをクリア")
-                            cancelAttachmentProcessing()
-                            onClear()
-                        }) {
+                            clearForm()
+                        }, enabled = !videoUploadInProgress) {
                             Icon(
                                 imageVector = Icons.Rounded.Refresh,
                                 contentDescription = "入力をクリア",
@@ -674,7 +686,7 @@ internal fun ThreadFormDialog(
                         Spacer(modifier = Modifier.weight(1f))
                         IconButton(onClick = {
                             AnalyticsTracker.uiControl("thread_form_more", "投稿フォームを閉じる")
-                            onDismiss()
+                            dismissAfterUpload()
                         }) {
                             Icon(
                                 imageVector = Icons.Outlined.MoreVert,

@@ -426,7 +426,7 @@ private fun CompatSettingsScreenBody(
     var confirmAttachmentClear by remember(path) { mutableStateOf(false) }
     val attachmentClearInProgress by CompatSettingsWork.attachmentClear
     var archiveReportEnabled by remember(path, preferences[ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY]) {
-        mutableStateOf(preferences[ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY] != "OFF")
+        mutableStateOf(preferences[ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY] == "ON")
     }
     var archiveReportStats by remember(path) { mutableStateOf<ArchiveReportOutboxStats?>(null) }
     val archiveReportSettingInProgress by CompatSettingsWork.archiveReportSetting
@@ -548,7 +548,11 @@ private fun CompatSettingsScreenBody(
                 // Decoding/validating a backup of up to 2MB and the restore
                 // itself must not run on the UI thread. The board synchronization waits for the restore and the
                 // boards it brings (D-B1), so a restored board is not deleted again in between (D1).
-                val result = withSharedBoardsRestore(store, restoreBoardsInto.takeIf { modernPresentation }, keep = { it.isSuccess }, historyStore = restoreBoardsInto ?: stateStore) {
+                var restoredHistoryUrls = emptySet<String>()
+                val result = withSharedBoardsRestore(
+                    store, restoreBoardsInto.takeIf { modernPresentation }, keep = { it.isSuccess && backupKind != "ng" },
+                    historyStore = restoreBoardsInto ?: stateStore, restoredHistoryUrls = { restoredHistoryUrls }
+                ) {
                   withContext(AppDispatchers.parsing) { runSuspendCatchingPreservingCancellation {
                     val raw = selected.bytes.decodeToString()
                     if (backupKind == "ng") {
@@ -566,14 +570,17 @@ private fun CompatSettingsScreenBody(
                             // Base64(JSON) keyword.cfg. Accept that file from
                             // the ordinary NG picker instead of requiring a
                             // separately selected directory.
+                            val legacy = decodeCompatLegacyBackup(raw)
+                            require(legacy.fileType == "keyword") { "旧版の keyword.cfg を選択してください" }
                             importCompatLegacyBackupData(
                                 store = store,
-                                backups = listOf(decodeCompatLegacyBackup(raw)),
+                                backups = listOf(legacy),
                                 boards = currentBoards
                             )
                         }
                     } else {
                         val payload = decodeCompatSettingsBackup(raw).settingsOnly()
+                        restoredHistoryUrls = payload.history.mapTo(hashSetOf()) { it.canonicalUrl }
                         val report = store.importSettingsBackup(
                             encodeCompatSettingsBackup(payload),
                             restoreUserSettings = true,
@@ -622,9 +629,10 @@ private fun CompatSettingsScreenBody(
                 // Saving a backup restores nothing; every other kind (settings, NG, the old app's files) can bring
                 // boards, and the board synchronization waits for them (D-B1, see the file picker above).
                 val restoring = !kind.startsWith("save_")
+                var restoredHistoryUrls = emptySet<String>()
                 val result = withSharedBoardsRestore(
-                    store, restoreBoardsInto.takeIf { modernPresentation && restoring }, keep = { restoring && it.isSuccess },
-                    historyStore = restoreBoardsInto ?: stateStore
+                    store, restoreBoardsInto.takeIf { modernPresentation && restoring }, keep = { restoring && kind != "ng" && it.isSuccess },
+                    historyStore = restoreBoardsInto ?: stateStore, restoredHistoryUrls = { restoredHistoryUrls }
                 ) {
                   withContext(AppDispatchers.parsing) { runSuspendCatchingPreservingCancellation {
                     val payload = if (kind == "save_settings") {
@@ -674,7 +682,9 @@ private fun CompatSettingsScreenBody(
                                 }
                             )
                         } else {
-                            encodeCompatSettingsBackup(decodeCompatSettingsBackup(raw).settingsOnly())
+                            val settings = decodeCompatSettingsBackup(raw).settingsOnly()
+                            restoredHistoryUrls = settings.history.mapTo(hashSetOf()) { it.canonicalUrl }
+                            encodeCompatSettingsBackup(settings)
                         }
                         val report = store.importSettingsBackup(
                             importPayload,

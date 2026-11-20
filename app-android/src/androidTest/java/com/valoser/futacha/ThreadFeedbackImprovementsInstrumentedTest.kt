@@ -85,7 +85,7 @@ class ThreadFeedbackImprovementsInstrumentedTest {
         rule.setContent { MaterialTheme { CompositionLocalProvider(LocalFutachaImageLoader provides loader) {
             ProvideFutachaSharedFeatures(store, client, FakeBoardRepository(), null, null, "test") {
                 FutachaCatalogFeatureHost(board, CatalogMode.Catalog, CatalogUiState.Loading, FakeBoardRepository(), {}, {}, {}, {}, {}, {}) {
-                    val search = LocalFutachaCatalogTools.current.first { it.label == "キャッシュ検索" }
+                    val search = LocalFutachaCatalogTools.current.first { it.label == "過去スレ検索" }
                     TextButton(onClick = search.action) { Text("履歴テスト検索") }
                 }
             }

@@ -179,7 +179,8 @@ internal fun FutaberPostScreen(
     val density = androidx.compose.ui.platform.LocalDensity.current
     // Closed once: the right swipe and iOS's edge gesture may both end the same touch.
     var closed by remember { mutableStateOf(false) }
-    val close: () -> Unit = { if (!closed && !sending) { closed = true; onClose() } }
+    var videoUploadInProgress by remember { mutableStateOf(false) }
+    val close: () -> Unit = { if (!closed && !sending && !videoUploadInProgress) { closed = true; onClose() } }
     PlatformBackHandler(enabled = true) {
         when {
             sending -> Unit
@@ -234,7 +235,7 @@ internal fun FutaberPostScreen(
 
     fun send() {
         // A second tap (the confirmation's button, the send button) while a post is on its way sends nothing more.
-        if (sending) return
+        if (sending || videoUploadInProgress) return
         errorMessage = null
         lastFailure = null
         sending = true
@@ -324,8 +325,8 @@ internal fun FutaberPostScreen(
             HorizontalDivider(color = colors.separator, thickness = 0.5.dp)
             FutaberPostToolbar(
                 tools = futaberPostTools(canQuote = onEnterQuoteMode != null),
-                sending = sending,
-                sendStyle = futaberPostSendStyle(comment, attachedImage != null, busy = sending || attachment.processing),
+                sending = sending || videoUploadInProgress,
+                sendStyle = futaberPostSendStyle(comment, attachedImage != null, busy = sending || attachment.processing || videoUploadInProgress),
                 // Drawn as the other tools even while the text is empty, as the original's (a press then changes nothing).
                 kanaEnabled = !sending,
                 pasteboardAvailable = pasteboard != null,
@@ -341,7 +342,7 @@ internal fun FutaberPostScreen(
                         }
                         "settings" -> settingsOpen = true
                         "paste" -> pasteImage.paste()
-                        "quote-mode" -> onEnterQuoteMode?.invoke()
+                        "quote-mode" -> if (!videoUploadInProgress) onEnterQuoteMode?.invoke()
                     }
                 },
                 onClearLongPress = { anchor -> restoreAnchor = anchor },
@@ -467,13 +468,19 @@ internal fun FutaberPostScreen(
                 text = { Text(question) },
                 confirmButton = {
                     TextButton(modifier = Modifier.testTag("futaber-video-ups-ok"), onClick = {
+                        if (videoUploadInProgress) return@TextButton
                         attachment.clearPendingUps()
                         val client = tools.httpClient
                         val key = deleteKey
+                        videoUploadInProgress = true
                         scope.launch {
-                            toolsState.message = com.valoser.futacha.shared.ui.compat.uploadCompatVideoToUps(video,
-                                client?.let { c -> { v -> com.valoser.futacha.shared.ui.compat.uploadCompatUps(c, v, "", key, tools.appVersion).getOrThrow() } },
-                                appendName = { upsCommentChange(appendCompatPostText(upsComment, it)) })
+                            try {
+                                toolsState.message = com.valoser.futacha.shared.ui.compat.uploadCompatVideoToUps(video,
+                                    client?.let { c -> { v -> com.valoser.futacha.shared.ui.compat.uploadCompatUps(c, v, "", key, tools.appVersion).getOrThrow() } },
+                                    appendName = { upsCommentChange(appendCompatPostText(upsComment, it)) })
+                            } finally {
+                                videoUploadInProgress = false
+                            }
                         }
                     }) { Text("OK", color = colors.link) }
                 },

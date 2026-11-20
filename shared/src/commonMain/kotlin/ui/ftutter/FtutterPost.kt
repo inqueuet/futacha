@@ -329,17 +329,29 @@ internal fun FtutterPostDialog(
             onSaveDraft(current, false)
         }
     }
-    // シートの時は原作どおりファイルの選択で、jpg・jpeg・png・gif・webp・mp4・webmに絞る（M89）。従来の動きは共有の選び方の設定。
-    val pick = com.valoser.futacha.shared.ui.board.rememberAttachmentPickerLauncher(
-        preference = if (legacyDialog) pickerPreference else AttachmentPickerPreference.DOCUMENT,
-        mimeType = if (legacyDialog) "image/*" else "*/*",
+    // シートの時は jpg・jpeg・png・gif・webp・mp4・webm に絞る（M89）。原作はファイルの選択だったが、画像の一覧が出なくて
+    // 困るという声（may 1448778226）でユーザーが変更を認め、画像はギャラリー、動画は別の項目で選ぶ。従来の動きは共有の選び方の設定。
+    val onPicked: (com.valoser.futacha.shared.util.ImageData) -> Unit = { picked ->
+        if (!legacyDialog && !ftutterAttachmentExtensionAllowed(picked.fileName)) attachment.error = FTUTTER_ATTACHMENT_EXTENSION_REFUSED
+        else attachment.offer(picked, capabilities, isReply)
+    }
+    // 動画の選択は従来の動きでは使わないので、その時は用意しない（Androidの選択の登録を増やさない）。
+    // 優先ファイルマネージャーは渡さない：渡すとそのファイラーが開き、画像の一覧が出ない声が直らない。
+    val pickVideo = if (legacyDialog) null else com.valoser.futacha.shared.ui.board.rememberAttachmentPickerLauncher(
+        preference = AttachmentPickerPreference.MEDIA,
+        mimeType = FTUTTER_ATTACHMENT_VIDEO_TYPES,
         maxBytes = com.valoser.futacha.shared.ui.compat.COMPAT_POST_PICKER_MAX_BYTES,
-        preferredFileManagerPackage = preferredFileManagerPackage,
+        preferredFileManagerPackage = null,
         onSelectionError = { attachment.error = it },
-        onImageSelected = { picked ->
-            if (!legacyDialog && !ftutterAttachmentExtensionAllowed(picked.fileName)) attachment.error = FTUTTER_ATTACHMENT_EXTENSION_REFUSED
-            else attachment.offer(picked, capabilities, isReply)
-        }
+        onImageSelected = onPicked
+    )
+    val pick = com.valoser.futacha.shared.ui.board.rememberAttachmentPickerLauncher(
+        preference = if (legacyDialog) pickerPreference else AttachmentPickerPreference.MEDIA,
+        mimeType = if (legacyDialog) "image/*" else FTUTTER_ATTACHMENT_IMAGE_TYPES,
+        maxBytes = com.valoser.futacha.shared.ui.compat.COMPAT_POST_PICKER_MAX_BYTES,
+        preferredFileManagerPackage = if (legacyDialog) preferredFileManagerPackage else null,
+        onSelectionError = { attachment.error = it },
+        onImageSelected = onPicked
     )
     // こちらの追加：コピーした画像を添付する（may 1447450917）。添付の決まりは選んだファイルと同じ。
     val pasteImage = com.valoser.futacha.shared.util.rememberClipboardImagePaste(
@@ -468,6 +480,11 @@ internal fun FtutterPostDialog(
             modifier = Modifier.testTag("ftutter-post-clear-upload-cache")
         )
     }
+    val multiPick: (() -> Unit)? = pickMany?.takeIf { uploadUps != null || isAimogeBoard }
+        ?.let { many -> { if (ftutterPostCanSend(sending, attachment.processing, upsBusy)) many() } }
+    // 送信中は選ばない（複数選択と同じ守り）。
+    val pickOne: () -> Unit = { if (ftutterPostCanSend(sending, attachment.processing, upsBusy)) pick() }
+    val pickOneVideo: (() -> Unit)? = pickVideo?.let { video -> { if (ftutterPostCanSend(sending, attachment.processing, upsBusy)) video() } }
     val menuHandwriting: @Composable () -> Unit = {
         // こちらの追加：複数の画像を一度に選ぶ（1枚目は添付、残りはあぷ小。あいもげは3枚まで1つの書き込みに）。
         if (pickMany != null && (uploadUps != null || isAimogeBoard)) DropdownMenuItem(
@@ -528,9 +545,7 @@ internal fun FtutterPostDialog(
                     modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp).focusRequester(focus).testTag("ftutter-post-comment"))
                 if (!(imgB && isReply) || attachment.image?.isHandwriting == true) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (!(imgB && isReply)) IconButton(onClick = pick, modifier = Modifier.testTag("ftutter-post-attach")) {
-                            Icon(Icons.Rounded.AddPhotoAlternate, contentDescription = "画像を足す", tint = colors.text)
-                        }
+                        if (!(imgB && isReply)) FtutterAttachButton(pickOne, pickOneVideo, multiPick, Icons.Rounded.AddPhotoAlternate, "画像を足す", colors.text)
                         FtutterAttachmentThumbnail(attachment.image) { previewOpen = true }
                         val shown = attachment.image?.fileName ?: if (attachment.processing) "準備中…" else null
                         if (shown != null) Text(shown, color = colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -638,9 +653,7 @@ internal fun FtutterPostDialog(
                 val fileRow = !(imgB && isReply) || attachment.image?.isHandwriting == true
                 if (fileRow || ftutterPostOffersUps(uploadUps != null)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (!(imgB && isReply)) IconButton(onClick = pick, modifier = Modifier.testTag("ftutter-post-attach")) {
-                            Icon(Icons.Rounded.AttachFile, contentDescription = "添付", tint = colors.text)
-                        }
+                        if (!(imgB && isReply)) FtutterAttachButton(pickOne, pickOneVideo, multiPick, Icons.Rounded.AttachFile, "添付", colors.text)
                         if (fileRow) {
                             FtutterAttachmentThumbnail(attachment.image) { previewOpen = true }
                             Text(
@@ -953,4 +966,34 @@ private fun FtutterAttachmentThumbnail(image: com.valoser.futacha.shared.util.Im
             .clickable(onClick = onOpen)
             .testTag("ftutter-post-attachment-thumbnail")
     )
+}
+
+/**
+ * The attach button. With a multiple pick on hand it asks one or several first (aimg seq41: the multiple pick was three
+ * taps deep in その他の機能); otherwise it picks one straight away, as the original does.
+ */
+@Composable
+private fun FtutterAttachButton(
+    pick: () -> Unit,
+    pickVideo: (() -> Unit)?,
+    multiPick: (() -> Unit)?,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    tint: androidx.compose.ui.graphics.Color
+) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        val menu = multiPick != null || pickVideo != null
+        IconButton(onClick = { if (!menu) pick() else open = true }, modifier = Modifier.testTag("ftutter-post-attach")) {
+            Icon(icon, contentDescription = label, tint = tint)
+        }
+        if (menu) DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(text = { Text(if (pickVideo != null) "画像を選ぶ" else "1つ選ぶ") }, onClick = { open = false; pick() },
+                modifier = Modifier.testTag("ftutter-post-attach-one"))
+            if (pickVideo != null) DropdownMenuItem(text = { Text("動画を選ぶ") }, onClick = { open = false; pickVideo() },
+                modifier = Modifier.testTag("ftutter-post-attach-video"))
+            if (multiPick != null) DropdownMenuItem(text = { Text(com.valoser.futacha.shared.ui.compat.COMPAT_MULTI_PICK_LABEL) },
+                onClick = { open = false; multiPick() }, modifier = Modifier.testTag("ftutter-post-attach-multi"))
+        }
+    }
 }

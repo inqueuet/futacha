@@ -622,12 +622,16 @@ internal fun CompatCatalogGridItem(
                 )
             }
             if (replyCountPlacement == CompatCatalogReplyCountPlacement.ON_THUMBNAIL) {
+                // seq29 (aimg 01a1ec77): on small 5-column cells the opaque
+                // strips hid much of the picture.  Keep them translucent and
+                // only as tall as the digits.
                 Row(
-                    modifier = Modifier.align(Alignment.TopEnd).background(catalogCardBackground),
+                    modifier = Modifier.align(Alignment.TopEnd)
+                        .background(catalogCardBackground.copy(alpha = COMPAT_CATALOG_OVERLAY_ALPHA)),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (isOld) Text("古", color = Color(0xFFFF8000), fontSize = 12.sp)
-                    Text(item.replyCount.toString(), fontSize = 12.sp, color = palette.text)
+                    if (isOld) Text("古", color = Color(0xFFFF8000), fontSize = 12.sp, lineHeight = 13.sp)
+                    Text(item.replyCount.toString(), fontSize = 12.sp, lineHeight = 13.sp, color = palette.text)
                     replyIndicator?.let { indicator ->
                         CompatNewRepliesBadge(indicator.count)
                     }
@@ -650,10 +654,11 @@ internal fun CompatCatalogGridItem(
                     text = matchedWatchWords.joinToString("・"),
                     modifier = Modifier
                         .align(Alignment.BottomStart)
-                        .background(palette.searchResultBackground)
-                        .padding(horizontal = 3.dp, vertical = 1.dp),
+                        .background(palette.searchResultBackground.copy(alpha = COMPAT_CATALOG_OVERLAY_ALPHA))
+                        .padding(horizontal = 3.dp),
                     color = palette.text,
                     fontSize = 11.sp,
+                    lineHeight = 12.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -946,3 +951,6 @@ internal fun CompatThreadStatusBand(status: CompatCatalogDroppedClass, modifier:
         )
     }
 }
+
+/** How opaque the labels drawn over a grid thumbnail are (seq29). */
+internal const val COMPAT_CATALOG_OVERLAY_ALPHA = 0.72f

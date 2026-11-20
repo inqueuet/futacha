@@ -71,6 +71,8 @@ suspend fun importAppHistoryArchive(
     // Taken before reading the archive: a deletion made while it is read must
     // not be undone by the merge, while older deletions may be restored.
     val ticket = stateStore.beginHistoryImport()
+    val restoredEntries = mutableListOf<ThreadHistoryEntry>()
+    var merged = false
     try {
         importHistoryArchive(
             fileSystem = fileSystem,
@@ -78,17 +80,26 @@ suspend fun importAppHistoryArchive(
             request = HistoryArchiveImportRequest(
                 archiveDirectory = archiveDirectory,
                 selectedSnapshotIds = selectedSnapshotIds
-            )
+            ),
+            onEntryRestored = { restoredEntries += it }
         ).mapCatching { archiveImport ->
             // Merged against the latest history in one mutation, so reading
             // positions and entries changed during the import are kept.
-            val merge = stateStore.mergeImportedHistory(archiveImport.importedHistoryEntries, ticket)
+            val merge = withContext(NonCancellable) {
+                stateStore.mergeImportedHistory(restoredEntries, ticket).also { merged = true }
+            }
             AppHistoryArchiveImportResult(
                 archiveImport = archiveImport,
                 merge = merge
             )
         }
     } finally {
-        withContext(NonCancellable) { stateStore.endHistoryImport(ticket) }
+        withContext(NonCancellable) {
+            try {
+                if (!merged && restoredEntries.isNotEmpty()) stateStore.mergeImportedHistory(restoredEntries, ticket)
+            } finally {
+                stateStore.endHistoryImport(ticket)
+            }
+        }
     }
 }

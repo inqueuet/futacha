@@ -342,6 +342,7 @@ class IosExperienceProfileStoreTest {
         try {
             val store = IosCompatibilityStore(fileSystem, nowMillis = { 1_000L })
             store.initialize()
+            store.savePreference(ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY, "ON")
             assertTrue(
                 store.enqueueArchiveReport(
                     rawThreadUrl = "https://may.2chan.net/b/res/123456.htm",
@@ -377,6 +378,7 @@ class IosExperienceProfileStoreTest {
         try {
             val store = IosCompatibilityStore(fileSystem, nowMillis = { 1_000L })
             store.initialize()
+            store.savePreference(ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY, "ON")
             store.enqueueArchiveReport("https://may.2chan.net/b/res/123456.htm", 1_000L)
             val processor = IosArchiveReportOutboxProcessor { _, _ ->
                 IosArchiveReportHttpResult(status = 503, response = null, retryAfterMillis = 60_000L)

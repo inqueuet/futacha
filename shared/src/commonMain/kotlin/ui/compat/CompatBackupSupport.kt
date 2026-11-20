@@ -397,15 +397,9 @@ internal suspend fun importCompatLegacyBackupData(
         existingNgRuleIds = existingRuleIds,
         nowEpochMillis = now
     )
-    // Everything is decoded and validated above before the first write. The
-    // old per-item path saved each preference and NG rule separately (each a
-    // full state rewrite on iOS/desktop), which could freeze for minutes and
-    // left a half-restored state when one item failed. Boards go first in one
-    // batch because the NG scopes are checked against them; the rest is one
-    // store transaction.
-    if (legacyBoards.isNotEmpty()) store.upsertBoards(legacyBoards)
+    val payload = encodeCompatSettingsBackup(plan.backup.copy(boards = legacyBoards))
     store.importSettingsBackup(
-        encodeCompatSettingsBackup(plan.backup),
+        payload,
         restoreUserSettings = true,
         restoreNgRules = true
     )

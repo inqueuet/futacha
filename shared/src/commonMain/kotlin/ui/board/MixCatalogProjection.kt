@@ -3,7 +3,7 @@ package com.valoser.futacha.shared.ui.board
 import com.valoser.futacha.shared.compat.*
 import com.valoser.futacha.shared.mix.MixEntry
 import com.valoser.futacha.shared.model.normalizeCatalogSearchText
-import com.valoser.futacha.shared.model.normalizeWatchSearchText
+import com.valoser.futacha.shared.model.normalizeCatalogNgText
 import com.valoser.futacha.shared.ui.compat.compatCommonNgApplyEnabled
 import com.valoser.futacha.shared.ui.compat.compatCommonNgFtutterRules
 import com.valoser.futacha.shared.ui.compat.compatPreferenceValue
@@ -35,7 +35,7 @@ internal suspend fun calculateMixCatalogProjection(
     if (!mixCatalogNgEnabled(preferences, policy)) return@withContext projected
     val commonOn = compatCommonNgApplyEnabled(preferences)
     fun normalizeWord(text: String): String = when (policy) {
-        MixModePolicy.FUTACHA -> normalizeWatchSearchText(text)
+        MixModePolicy.FUTACHA -> normalizeCatalogNgText(text)
         MixModePolicy.COMPAT -> normalizeCompatSearchText(text)
         else -> normalizeCatalogSearchText(text)
     }

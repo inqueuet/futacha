@@ -202,7 +202,7 @@ class CompatPreferenceSchemaTest {
             // Includes the high-quality thumbnail extension and its note.
             "network" to 9,
             "storage" to 10,
-            "thread" to 23, // + the privacy blur, the title size, the header size and the gap between posts (this app's own), + 18-20's reply menu size, + the press highlight switch
+            "thread" to 24, // + the privacy blur, the title size, the header size and the gap between posts (this app's own), + 18-20's reply menu size, + the press highlight switch, + the own-post line
             "viewer" to 6 // + 18-20's tap toolbar, video panel auto hide and video autoplay
         )
         val entries = expectedCounts.flatMap { (path, count) ->
@@ -210,9 +210,9 @@ class CompatPreferenceSchemaTest {
                 .map { path to it }
         }
 
-        assertEquals(94, entries.size) // Includes the board-list-entry-only refresh extension.
+        assertEquals(95, entries.size) // Includes the board-list-entry-only refresh extension.
         assertEquals(
-            93,
+            94,
             entries.map { (path, entry) -> compatPreferenceStorageKey(path, entry.preferenceKey) }.toSet().size,
             "Catalog and Thread must share commonPrivacyAlpha"
         )
@@ -322,7 +322,7 @@ class CompatPreferenceSchemaTest {
         assertEquals(
             listOf(
                 "threadDisplayMode", "threadHideDefaultNameAndSubject", "threadHeaderQuoteSimple", "threadHeaderSoudaneDisplay",
-                "threadAdminDeleteShow", "commonPrivacyAlpha", "commonPrivacyBlur", "threadFontSize", "threadHeaderFontSize", "threadTitleFontSize", "threadPostSpacing", "threadPressHighlight", "threadThumbSize",
+                "threadAdminDeleteShow", "commonPrivacyAlpha", "commonPrivacyBlur", "threadFontSize", "threadHeaderFontSize", "threadTitleFontSize", "threadPostSpacing", "threadPressHighlight", "threadOwnPostLine", "threadThumbSize",
                 "threadUpsThumbSize", "threadUpsThumbMethod", "threadContextMenuScale"
             ),
             groups[1].second.map(CompatSettingEntry::preferenceKey)

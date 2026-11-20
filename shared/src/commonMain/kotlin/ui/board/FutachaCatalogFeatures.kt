@@ -278,7 +278,7 @@ internal fun FutachaCatalogFeatureHost(
         },
         FutachaThreadTool("NGの詳細管理", Icons.Rounded.Block) { ngOpen = true },
     ) + listOfNotNull(
-        if (futabaBoard) FutachaThreadTool("キャッシュ検索", Icons.Rounded.Search) { searchOpen = true } else null
+        if (futabaBoard) FutachaThreadTool("過去スレ検索", Icons.Rounded.Search) { searchOpen = true } else null
     ) + listOf(
         FutachaThreadTool("表示・取得の詳細設定", Icons.Rounded.Settings) { features.openSettings("catalog") }
     ) + listOfNotNull(

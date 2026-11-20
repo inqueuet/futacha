@@ -68,7 +68,7 @@ class ArchiveReportWorker(
             ?: return Result.failure()
         val store = runCatching { app.compatibilityStore }.getOrNull() ?: return Result.failure()
         val enabled = runSuspendCatchingPreservingCancellation {
-            store.loadPreference(ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY) != "OFF"
+            store.loadPreference(ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY) == "ON"
         }.getOrElse {
             Logger.w(TAG, "Unable to read archive report setting")
             return Result.retry()

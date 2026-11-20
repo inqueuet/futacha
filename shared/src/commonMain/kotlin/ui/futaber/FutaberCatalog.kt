@@ -232,7 +232,7 @@ internal fun FutaberCatalogScreen(
 
     // The "監視" order lists the threads matching the watch words, so a change of the words fetches it again (audit L23).
     val fetchWatchWords = if (sortMode == CatalogMode.WatchWords) watchWords else emptyList()
-    LaunchedEffect(board.id, board.url, sortMode, view.refreshTick, refreshSignal, fetchWatchWords) {
+    LaunchedEffect(board.id, board.url, sortMode, view.refreshTick, refreshSignal, fetchWatchWords, display.catalogThreadCount) {
         val key = FutaberCatalogFetchKey(board.url, sortMode, view.refreshTick, refreshSignal, fetchWatchWords)
         val startedAt = Clock.System.now().toEpochMilliseconds()
         // Coming back from a thread: the catalog on hand is still current, so keep it (and its scroll) as it is.
@@ -244,7 +244,7 @@ internal fun FutaberCatalogScreen(
         view.lastAttemptKey = key
         view.load = view.load.copy(isLoading = true, errorMessage = null)
         try {
-            val page = futaberFetchCatalogPage(repository, board.url, sortMode, watchWords)
+            val page = futaberFetchCatalogPage(repository, board.url, sortMode, watchWords, display.catalogThreadCount)
             view.history = futaberCatalogHistoryAfterLoad(
                 view.history, view.load.items, page.items,
                 sameQuery = view.fetchedKey == null || view.fetchedKey?.watchWords == key.watchWords

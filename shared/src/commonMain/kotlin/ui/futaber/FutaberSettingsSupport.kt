@@ -17,6 +17,8 @@ internal object FutaberSettingKeys {
     /** C21 (L-B9): futaber's 「比率 = N%」 (10〜100, 70 at first). */
     const val IMAGE_RATIO = "compat.futaber.imageRatio"
     const val CATALOG_SCROLL_TOP = "compat.futaber.catalog.scrollTop"
+    /** may 1448736916: how many threads the catalog asks for; unset keeps the app's layout (300). */
+    const val CATALOG_THREAD_COUNT = "compat.futaber.catalog.threadCount"
     const val CATALOG_ROW_WIDE = "compat.futaber.catalog.rowWide"
     /** Shared with ふたちゃ and としあき: [com.valoser.futacha.shared.compat.COMPAT_WATCH_ENABLED_KEY]. */
     const val PATROL_ENABLED = "compat.watcher.enabled"
@@ -116,7 +118,7 @@ internal object FutaberSettingKeys {
     /** B9: a live thread on screen is auto-saved as ふたちゃ does (pictures and videos are kept on the device). */
     const val EXT_AUTO_SAVE_VIEW = "compat.futaber.ext.autoSaveView"
     /**
-     * Shared with ふたちゃ and としあき(仮) ("閲覧スレ通知"): a stored "OFF" stops it, anything else (nothing stored) is on.
+     * Shared by all four modes ("閲覧スレ通知"): only a stored "ON" enables it.
      * [com.valoser.futacha.shared.compat.ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY].
      */
     const val ARCHIVE_REPORT = com.valoser.futacha.shared.compat.ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY
@@ -200,6 +202,8 @@ internal data class FutaberDisplaySettings(
     val quotePitchTenths: Int = FUTABER_QUOTE_PITCH_DEFAULT_TENTHS,
     val speechRateTenths: Int = 10,
     val scrollCatalogToTopOnRefresh: Boolean = true,
+    /** may 1448736916: the catalog's thread count; null asks with the app's layout as before. */
+    val catalogThreadCount: Int? = null,
     /** The list style's "やや広め" rows: taller thumbnails and room for two title lines. */
     val catalogRowWide: Boolean = false,
     /** Show a post's subject and name even when they are the board defaults. */
@@ -296,8 +300,8 @@ internal data class FutaberDisplaySettings(
     val extMediaOnlySave: Boolean = true,
     /** The shared custom font is applied to this mode's letters. */
     val extCustomFont: Boolean = true,
-    /** The shared "閲覧スレ通知": on unless it was turned off (in any mode). */
-    val archiveReportEnabled: Boolean = true,
+    /** The shared "閲覧スレ通知": off until enabled in any mode. */
+    val archiveReportEnabled: Boolean = false,
     /**
      * Tapping the upper or lower third of the thread scrolls a page (the gestures settings). G20 (L-B7): on unless it was
      * turned off, as futaber's 「する」 (a person who never set it gets it on; an explicit OFF stays).
@@ -358,6 +362,8 @@ internal data class FutaberDisplaySettings(
             speechPitchTenths = futaberSharedSpeechTenths(preferences[com.valoser.futacha.shared.audio.SPEECH_PITCH_KEY]),
             speechRateTenths = futaberSharedSpeechTenths(preferences[com.valoser.futacha.shared.audio.SPEECH_RATE_KEY]),
             scrollCatalogToTopOnRefresh = preferences[FutaberSettingKeys.CATALOG_SCROLL_TOP] != "OFF",
+            catalogThreadCount = preferences[FutaberSettingKeys.CATALOG_THREAD_COUNT]?.toIntOrNull()
+                ?.takeIf { it in FUTABER_CATALOG_THREADS_MIN..FUTABER_CATALOG_THREADS_MAX },
             catalogRowWide = preferences[FutaberSettingKeys.CATALOG_ROW_WIDE] == "ON",
             alwaysShowTitleAndName = preferences[FutaberSettingKeys.TITLE_NAME_ALWAYS] == "ON",
             viewerSwipeClose = preferences[FutaberSettingKeys.VIEWER_SWIPE_CLOSE] == "ON",
@@ -409,7 +415,7 @@ internal data class FutaberDisplaySettings(
             extExternalWatcher = preferences[FutaberSettingKeys.EXT_EXTERNAL_WATCHER] != "OFF",
             extMediaOnlySave = preferences[FutaberSettingKeys.EXT_MEDIA_ONLY_SAVE] != "OFF",
             extCustomFont = preferences[FutaberSettingKeys.EXT_CUSTOM_FONT] != "OFF",
-            archiveReportEnabled = preferences[FutaberSettingKeys.ARCHIVE_REPORT] != "OFF",
+            archiveReportEnabled = preferences[FutaberSettingKeys.ARCHIVE_REPORT] == "ON",
             tapScroll = preferences[FutaberSettingKeys.TAP_SCROLL] != "OFF",
             googleLens = preferences[FutaberSettingKeys.GOOGLE_LENS] == "ON",
             postGapDp = preferences[FutaberSettingKeys.POST_GAP]?.toIntOrNull()

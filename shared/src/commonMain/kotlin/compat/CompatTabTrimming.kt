@@ -80,7 +80,14 @@ internal fun compatTabTrimRanks(tabViews: List<CompatSharedTabView>): Map<String
     }
 }
 
-/** The keys [planSharedTabTrim] never trims besides the stars: the active tab, the modes' rows and the held tabs. */
+private const val COMPAT_TAB_PROTECTION_PREFIX = "compat.tabProtection."
+
+internal fun compatTabProtectionKey(tabKey: String) = COMPAT_TAB_PROTECTION_PREFIX + tabKey
+
+internal fun Map<String, String>.isCompatTabProtected(tabKey: String): Boolean =
+    this[compatTabProtectionKey(tabKey)] == "ON"
+
+/** The keys [planSharedTabTrim] never trims besides the stars: the active tab, protected tabs, the modes' rows and the held tabs. */
 fun compatTabTrimExemptKeys(
     activeTabKey: String?,
     preferences: Map<String, String>,
@@ -90,6 +97,11 @@ fun compatTabTrimExemptKeys(
     activeTabKey?.let(::add)
     addAll(compatModeListTabKeys(preferences, boards))
     addAll(screenHeldKeys)
+    for ((key, value) in preferences) {
+        if (value == "ON" && key.startsWith(COMPAT_TAB_PROTECTION_PREFIX)) {
+            add(key.removePrefix(COMPAT_TAB_PROTECTION_PREFIX))
+        }
+    }
 }
 
 /** The tabs newest first, without the ones [planSharedTabTrim] trims. */

@@ -59,7 +59,6 @@ final class WatchSnapshotStore: NSObject, ObservableObject {
     // Accessed only on workQueue (serial); tracks the newest accepted snapshot
     // so a stale replay (e.g. delayed applicationContext) cannot overwrite it.
     private var latestGeneratedAtMillis: Int64?
-    private var hasStoredNonEmptySnapshot = false
 
     private override init() {
         super.init()
@@ -209,16 +208,7 @@ final class WatchSnapshotStore: NSObject, ObservableObject {
                 ) else {
                     return
                 }
-                if self.shouldKeepCurrentSnapshot(insteadOf: snapshot) {
-                    if let ackId {
-                        self.ackSnapshot(id: ackId)
-                    }
-                    return
-                }
                 self.latestGeneratedAtMillis = snapshot.generatedAtMillis
-                if !snapshot.threads.isEmpty {
-                    self.hasStoredNonEmptySnapshot = true
-                }
                 UserDefaults.standard.set(json, forKey: self.snapshotDefaultsKey)
                 if let ackId {
                     self.ackSnapshot(id: ackId)
@@ -275,21 +265,10 @@ final class WatchSnapshotStore: NSObject, ObservableObject {
                 return
             }
             self.latestGeneratedAtMillis = snapshot.generatedAtMillis
-            if !snapshot.threads.isEmpty {
-                self.hasStoredNonEmptySnapshot = true
-            }
             DispatchQueue.main.async {
                 self.snapshot = snapshot
             }
         }
-    }
-
-    private func shouldKeepCurrentSnapshot(insteadOf snapshot: WatchSnapshot) -> Bool {
-        // A snapshot with neither boards nor threads comes from an iPhone app that has
-        // not loaded its state yet; keep the stored one. A newer snapshot that still
-        // lists boards is authoritative even without threads (the history was cleared),
-        // otherwise the Watch kept showing deleted threads indefinitely.
-        snapshot.threads.isEmpty && snapshot.boards.isEmpty && hasStoredNonEmptySnapshot
     }
 
     private func setReachable(_ value: Bool) {

@@ -427,7 +427,7 @@ internal val futaberNewThreadNotifyNoteLines: List<String> = listOf(
     "・キーワードを題名に含む新しいスレッドを通知します。「すべての板」のキーワードはどの板でも探します",
     "・アプリがバックグラウンドの時に通知するには、設定の「バックグラウンド更新」をオンにしてください（端末の省電力や強制停止で遅れたり止まったりします）",
     "・通知が出ない時は、端末の設定でこのアプリの通知を許可してください",
-    "・自動巡回・Wi-Fiのみ・見つかったスレッドの一覧は「キーワード通知・巡回」で設定します"
+    "・自動巡回・従量制でない回線のみ・見つかったスレッドの一覧は「キーワード通知・巡回」で設定します"
 )
 
 /** The sections of 新規スレッド通知: every board first (the rules without a board), then the boards of the shared store. */

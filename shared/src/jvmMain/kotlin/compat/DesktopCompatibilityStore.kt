@@ -1003,8 +1003,8 @@ internal class DesktopCompatibilityStore(
         } else null
         val trimmedTabs = trimCompatTabs(nextTabs, nextWorkspace.activeTabKey, it.preferences + raisedTabLimit.orEmpty(), nextBoards, screenHeldTabs.keys(), nextViews)
         val tabKeys = trimmedTabs.mapTo(mutableSetOf(), CompatTab::key)
-        val nextHistory = if (restoreUserSettings) backup.history.filter { entry -> entry.boardKey in boardKeys }
-            .fold(it.history) { all, entry -> replaceHistory(all, entry) } else it.history
+        val restoredHistory = if (restoreUserSettings) backup.history.filter { it.boardKey in boardKeys } else emptyList()
+        val nextHistory = restoredHistory.fold(it.history) { all, entry -> replaceHistory(all, entry) }
         val validRules = if (restoreNgRules) backup.ngRules.filter { rule ->
             isValidCompatNgRule(rule) &&
             isCompatNgScopeValid(rule.kind, rule.scopeKey, boardKeys, tabKeys)
@@ -1043,7 +1043,9 @@ internal class DesktopCompatibilityStore(
             ngRules = nextRules,
             toolbars = nextToolbars,
             workspace = nextWorkspace,
-            historyTombstones = if (restoreUserSettings) it.historyTombstones - backup.history.map { entry -> entry.canonicalUrl }.toSet() - COMPAT_HISTORY_CLEARED_MARKER else it.historyTombstones
+            historyTombstones = if (restoredHistory.isNotEmpty()) {
+                it.historyTombstones - restoredHistory.mapTo(hashSetOf()) { entry -> entry.canonicalUrl } - COMPAT_HISTORY_CLEARED_MARKER
+            } else it.historyTombstones
         )
         enforceSnapshotQuotaLocked()
         CompatSettingsBackupImportReport(

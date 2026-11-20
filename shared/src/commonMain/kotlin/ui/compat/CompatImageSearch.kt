@@ -7,14 +7,13 @@ import com.valoser.futacha.shared.media.mediaFileExtension
 import com.valoser.futacha.shared.network.readBoundedHttpResponseBytes
 import com.valoser.futacha.shared.network.readBoundedHttpResponseText
 import io.ktor.client.HttpClient
-import io.ktor.client.request.get
 import io.ktor.client.request.prepareGet
 import io.ktor.client.request.header
-import io.ktor.client.request.post
+import io.ktor.client.request.preparePost
 import io.ktor.client.request.setBody
-import io.ktor.client.request.forms.submitForm
+import io.ktor.client.request.forms.prepareForm
 import io.ktor.client.request.forms.formData
-import io.ktor.client.request.forms.submitFormWithBinaryData
+import io.ktor.client.request.forms.prepareFormWithBinaryData
 import io.ktor.http.ContentType
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
@@ -378,7 +377,7 @@ private suspend fun searchCompatMultipartHtmlProvider(
     image: CompatSearchUploadImage,
     acceptRedirectedResultUrl: Boolean = false
 ): CompatImageSearchResult {
-    val postResponse = readResponseBody { httpClient.submitFormWithBinaryData(
+    var statement = httpClient.prepareFormWithBinaryData(
         url = endpoint,
         formData = formData {
             append(
@@ -397,52 +396,39 @@ private suspend fun searchCompatMultipartHtmlProvider(
         header(HttpHeaders.UserAgent, COMPAT_FILE_SEARCH_USER_AGENT)
         header(HttpHeaders.AcceptLanguage, "ja,en-US;q=0.9,en;q=0.8")
         header(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8")
-    } }
+    }
     val providerHost = Url(baseUrl).host
-    // Ktor's redirect plugin never follows a POST, and on iOS the Darwin
-    // engine hands the 302/303 back as is (OkHttp follows it natively), so
-    // SauceNAO/IQDB failed there. Follow the provider's own Location by GET.
-    val response = followCompatSearchPostRedirects(httpClient, postResponse, providerHost, title)
-    require(response.status.isSuccess()) { "${title}検索に失敗しました (${response.status.value})" }
-    val finalUrl = response.call.request.url.toString()
-    require(isTrustedCompatSearchResultUrl(finalUrl, providerHost)) {
-        "${title}検索の応答先が不正です"
-    }
-    if (acceptRedirectedResultUrl && finalUrl.contains('?') && isTrustedCompatSearchResultUrl(finalUrl, "saucenao.com")) {
-        return CompatImageSearchResult.RemoteUrl(title, finalUrl)
-    }
-    val html = readBoundedHttpResponseText(
-        response,
-        COMPAT_FILE_SEARCH_MAX_RESPONSE_BYTES,
-        COMPAT_FILE_SEARCH_TIMEOUT_MILLIS
-    )
-    require(html.isNotBlank()) { "${title}検索の結果が空です" }
-    return CompatImageSearchResult.InlineHtml(title, html, baseUrl)
-}
-
-private suspend fun followCompatSearchPostRedirects(
-    httpClient: HttpClient,
-    initial: io.ktor.client.statement.HttpResponse,
-    providerHost: String,
-    title: String
-): io.ktor.client.statement.HttpResponse {
-    var response = initial
-    repeat(COMPAT_SEARCH_MAX_REDIRECTS) {
-        val location = compatSearchRedirectTarget(
-            status = response.status.value,
-            location = response.headers[HttpHeaders.Location],
-            requestUrl = response.call.request.url.toString()
-        ) ?: return response
-        require(isTrustedCompatSearchResultUrl(location, providerHost)) {
+    repeat(COMPAT_SEARCH_MAX_REDIRECTS + 1) { redirects ->
+        var location: String? = null
+        val result = readResponseBody {
+            statement.execute { response ->
+                val finalUrl = response.call.request.url.toString()
+                location = compatSearchRedirectTarget(response.status.value, response.headers[HttpHeaders.Location], finalUrl)
+                if (location != null) return@execute null
+                require(response.status.isSuccess()) { "${title}検索に失敗しました (${response.status.value})" }
+                require(isTrustedCompatSearchResultUrl(finalUrl, providerHost)) { "${title}検索の応答先が不正です" }
+                if (acceptRedirectedResultUrl && finalUrl.contains('?') && isTrustedCompatSearchResultUrl(finalUrl, "saucenao.com")) {
+                    return@execute CompatImageSearchResult.RemoteUrl(title, finalUrl)
+                }
+                val html = readBoundedHttpResponseText(
+                    response, COMPAT_FILE_SEARCH_MAX_RESPONSE_BYTES, COMPAT_FILE_SEARCH_TIMEOUT_MILLIS
+                )
+                require(html.isNotBlank()) { "${title}検索の結果が空です" }
+                CompatImageSearchResult.InlineHtml(title, html, baseUrl)
+            }
+        }
+        if (result != null) return result
+        val target = checkNotNull(location)
+        require(redirects < COMPAT_SEARCH_MAX_REDIRECTS && isTrustedCompatSearchResultUrl(target, providerHost)) {
             "${title}検索の応答先が不正です"
         }
-        response = readResponseBody { httpClient.get(location) {
+        statement = httpClient.prepareGet(target) {
             header(HttpHeaders.UserAgent, COMPAT_FILE_SEARCH_USER_AGENT)
             header(HttpHeaders.AcceptLanguage, "ja,en-US;q=0.9,en;q=0.8")
             header(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-        } }
+        }
     }
-    return response
+    error("${title}検索に失敗しました")
 }
 
 private const val COMPAT_SEARCH_MAX_REDIRECTS = 4
@@ -458,7 +444,7 @@ private suspend fun searchCompatYandexFile(
     httpClient: HttpClient,
     image: CompatSearchUploadImage
 ): CompatImageSearchResult {
-    val response = readResponseBody { httpClient.post(
+    val body = readResponseBody { httpClient.preparePost(
         "https://yandex.com/images-apphost/image-download" +
             "?cbird=111&images_avatars_size=preview&images_avatars_namespace=images-cbir"
     ) {
@@ -469,13 +455,12 @@ private suspend fun searchCompatYandexFile(
         header(HttpHeaders.Referrer, "https://yandex.com/images/")
         contentType(image.mime)
         setBody(image.bytes)
+    }.execute { response ->
+        require(response.status.isSuccess()) { "Yandex画像検索に失敗しました (${response.status.value})" }
+        readBoundedHttpResponseText(
+            response, COMPAT_FILE_SEARCH_MAX_RESPONSE_BYTES, COMPAT_FILE_SEARCH_TIMEOUT_MILLIS
+        )
     } }
-    require(response.status.isSuccess()) { "Yandex画像検索に失敗しました (${response.status.value})" }
-    val body = readBoundedHttpResponseText(
-        response,
-        COMPAT_FILE_SEARCH_MAX_RESPONSE_BYTES,
-        COMPAT_FILE_SEARCH_TIMEOUT_MILLIS
-    )
     val json = Json.parseToJsonElement(body).jsonObject
     val cbirId = json["cbir_id"]?.jsonPrimitive?.content?.trim().orEmpty()
     val resultImageUrl = json["url"]?.jsonPrimitive?.content?.trim().orEmpty()
@@ -528,32 +513,33 @@ internal suspend fun searchCompatAscii2d(
             require(isValidCompatAscii2dEndpoint(endpointUrl)) { "ascii2dの検索先が不正です" }
             require(isRemoteCompatImageUrl(imageUrl)) { "検索する画像URLが不正です" }
 
-            val response = readResponseBody { httpClient.submitForm(
+            readResponseBody { httpClient.prepareForm(
                 url = endpointUrl,
                 formParameters = Parameters.build {
                     // ascii2d's URI form accepts the already-public Futaba media URL;
                     // no second download or multipart copy is needed on the client.
                     append("uri", imageUrl)
                 }
-            ) }
-            val location = response.headers[HttpHeaders.Location]
-            if (!response.status.isSuccess() && location == null) {
-                error("HTTP ${response.status.value}")
-            }
-            location?.let(::normalizeCompatAscii2dResultUrl)?.let { return@withTimeout it }
+            ).execute { response ->
+                val location = response.headers[HttpHeaders.Location]
+                if (!response.status.isSuccess() && location == null) {
+                    error("HTTP ${response.status.value}")
+                }
+                location?.let(::normalizeCompatAscii2dResultUrl)?.let { return@execute it }
 
-            val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-            require(contentLength == null || contentLength <= ASCII2D_RESPONSE_MAX_BYTES) {
-                "検索結果が大きすぎます"
-            }
-            val body = readBoundedHttpResponseText(
-                response,
-                ASCII2D_RESPONSE_MAX_BYTES,
-                ASCII2D_RESPONSE_TIMEOUT_MILLIS
-            )
-            ASCII2D_RESULT_REGEX.find(body)?.value?.let(::normalizeCompatAscii2dResultUrl)
-                ?: ASCII2D_RELATIVE_RESULT_REGEX.find(body)?.value?.let(::normalizeCompatAscii2dResultUrl)
-                ?: error("検索結果URLを取得できませんでした")
+                val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+                require(contentLength == null || contentLength <= ASCII2D_RESPONSE_MAX_BYTES) {
+                    "検索結果が大きすぎます"
+                }
+                val body = readBoundedHttpResponseText(
+                    response,
+                    ASCII2D_RESPONSE_MAX_BYTES,
+                    ASCII2D_RESPONSE_TIMEOUT_MILLIS
+                )
+                ASCII2D_RESULT_REGEX.find(body)?.value?.let(::normalizeCompatAscii2dResultUrl)
+                    ?: ASCII2D_RELATIVE_RESULT_REGEX.find(body)?.value?.let(::normalizeCompatAscii2dResultUrl)
+                    ?: error("検索結果URLを取得できませんでした")
+            } }
         })
     } catch (cancelled: CancellationException) {
         // An internal withTimeout must end as a reported failure; otherwise
@@ -620,7 +606,7 @@ internal suspend fun searchCompatGoogleLensFile(
 
             val extension = mediaFileExtension(imageUrl).ifBlank { "jpg" }
             val uploadUrl = "$GOOGLE_LENS_UPLOAD_ENDPOINT?ep=cntpubb&hl=ja&re=df&s=4&st=$nowEpochMillis"
-            val response = readResponseBody { httpClient.submitFormWithBinaryData(
+            readResponseBody { httpClient.prepareFormWithBinaryData(
                 url = uploadUrl,
                 formData = formData {
                     append(
@@ -635,23 +621,24 @@ internal suspend fun searchCompatGoogleLensFile(
                         }
                     )
                 }
-            ) }
-            val location = response.headers[HttpHeaders.Location]
-            if (!response.status.isSuccess() && location == null) {
-                error("Lens HTTP ${response.status.value}")
-            }
-            normalizeCompatGoogleResultUrl(location)?.let { return@withTimeout it }
-            normalizeCompatGoogleResultUrl(response.call.request.url.toString())?.let { return@withTimeout it }
+            ).execute { response ->
+                val location = response.headers[HttpHeaders.Location]
+                if (!response.status.isSuccess() && location == null) {
+                    error("Lens HTTP ${response.status.value}")
+                }
+                normalizeCompatGoogleResultUrl(location)?.let { return@execute it }
+                normalizeCompatGoogleResultUrl(response.call.request.url.toString())?.let { return@execute it }
 
-            val responseLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-            require(responseLength == null || responseLength <= GOOGLE_LENS_RESPONSE_MAX_BYTES) {
-                "Lensの応答が大きすぎます"
-            }
-            val body = readBoundedHttpResponseText(response, GOOGLE_LENS_RESPONSE_MAX_BYTES, 30_000L)
-            val htmlUrl = compatGoogleLensHtmlResultRegex.find(body)?.groupValues?.getOrNull(1)
-                ?.replace("&amp;", "&")
-            normalizeCompatGoogleResultUrl(htmlUrl)
-                ?: error("Lensの検索結果URLを取得できませんでした")
+                val responseLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+                require(responseLength == null || responseLength <= GOOGLE_LENS_RESPONSE_MAX_BYTES) {
+                    "Lensの応答が大きすぎます"
+                }
+                val body = readBoundedHttpResponseText(response, GOOGLE_LENS_RESPONSE_MAX_BYTES, 30_000L)
+                val htmlUrl = compatGoogleLensHtmlResultRegex.find(body)?.groupValues?.getOrNull(1)
+                    ?.replace("&amp;", "&")
+                normalizeCompatGoogleResultUrl(htmlUrl)
+                    ?: error("Lensの検索結果URLを取得できませんでした")
+            } }
         })
     } catch (cancelled: CancellationException) {
         // An internal withTimeout must end as a reported failure; otherwise
@@ -686,7 +673,7 @@ private suspend fun searchCompatGoogleFileUpload(
             ).bytes
             require(imageBytes.isNotEmpty()) { "画像が空です" }
             val extension = mediaFileExtension(imageUrl).ifBlank { "jpg" }
-            val response = readResponseBody { httpClient.submitFormWithBinaryData(
+            readResponseBody { httpClient.prepareFormWithBinaryData(
                 url = endpoint,
                 formData = formData {
                     append(
@@ -702,10 +689,11 @@ private suspend fun searchCompatGoogleFileUpload(
                     )
                     append(extraFieldName, "")
                 }
-            ) }
-            normalizeCompatGoogleResultUrl(response.headers[HttpHeaders.Location])
-                ?: normalizeCompatGoogleResultUrl(response.call.request.url.toString())
-                ?: error("Google画像検索の結果URLを取得できませんでした")
+            ).execute { response ->
+                normalizeCompatGoogleResultUrl(response.headers[HttpHeaders.Location])
+                    ?: normalizeCompatGoogleResultUrl(response.call.request.url.toString())
+                    ?: error("Google画像検索の結果URLを取得できませんでした")
+            } }
         })
     } catch (cancelled: CancellationException) {
         // An internal withTimeout must end as a reported failure; otherwise

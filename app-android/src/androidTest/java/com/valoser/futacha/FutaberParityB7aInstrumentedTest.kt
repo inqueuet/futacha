@@ -37,7 +37,7 @@ import org.junit.Test
 /**
  * ふたばー風モードの機能そろえ B7a（カタログ系：そ順・監視、監視ワードの強調、レス数による優先表示、世代で戻す、
  * キャッシュサーバー検索・ブラウザ、アラート用の監視ワード）。同梱の模擬データ（チュートリアル板と、may板のアドレスで
- * 模擬リポジトリを読む板）だけを使い、実サーバーへは送らない（キャッシュ検索はダイアログを開くまで。検索・ブラウザで開くは
+ * 模擬リポジトリを読む板）だけを使い、実サーバーへは送らない（過去スレ検索はダイアログを開くまで。検索・ブラウザで開くは
  * 押さない。閲覧スレ通知は試験中オフにする）。
  */
 private const val B7A_TUTORIAL_URL = "https://www.example.com/t/futaba.php"
@@ -220,7 +220,7 @@ class FutaberParityB7aInstrumentedTest {
         waitForTag("futaber-settings-done")
         rule.onNodeWithTag("futaber-settings-done").performClick()
         rule.waitUntil(5_000) { absent("futaber-settings") }
-        // The thread menu has no "キャッシュ検索".
+        // The thread menu has no "過去スレ検索".
         rule.onAllNodesWithTag("futaber-catalog-item")[0].performClick()
         waitForTag("futaber-post")
         openMenu()
@@ -340,10 +340,10 @@ class FutaberParityB7aInstrumentedTest {
         openRefreshSheet()
         action("catalog-browser").assertIsEnabled()
         action("cache-search").assertIsEnabled().performClick()
-        rule.waitUntil(10_000) { rule.onAllNodesWithText("キャッシュ検索").fetchSemanticsNodes().isNotEmpty() }
+        rule.waitUntil(10_000) { rule.onAllNodesWithText("過去スレ検索").fetchSemanticsNodes().isNotEmpty() }
         assertTrue(absent("futaber-post-actions"))
         rule.onNodeWithText("閉じる").performClick()
-        rule.waitUntil(10_000) { rule.onAllNodesWithText("キャッシュ検索").fetchSemanticsNodes().isEmpty() }
+        rule.waitUntil(10_000) { rule.onAllNodesWithText("過去スレ検索").fetchSemanticsNodes().isEmpty() }
         rule.onAllNodesWithTag("futaber-catalog-item")[0].performClick()
         waitForTag("futaber-post")
         openMenu()

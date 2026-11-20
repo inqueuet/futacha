@@ -60,32 +60,31 @@ class CompactCatalogToolbarInstrumentedTest {
         rule.waitUntil(10_000) { rule.onAllNodes(catalogBar).fetchSemanticsNodes().isNotEmpty() }
     }
 
-    @Test fun defaultsFitAt375393And411DpAndOtherIsPinnedAtTheRightEdge() {
+    @Test fun defaultsScrollAt375393And411DpAndOtherIsPinnedAtTheRightEdge() {
         showCatalog()
         assertEquals(10, savedItems.count { it.active })
         for (scale in listOf(1f, 1.6f)) for (logicalWidth in listOf(375f, 393f, 411f)) {
             rule.runOnIdle { logicalWidthState.floatValue = logicalWidth; fontScale.floatValue = scale }
             val bar = rule.onNode(catalogBar).fetchSemanticsNode().boundsInRoot
-            for (key in savedItems.filter { it.active }.map { it.key } + "other") {
-                val node = rule.onNodeWithTag("compat-toolbar-command-$key").assertIsDisplayed().fetchSemanticsNode()
-                assertTrue("$key is clipped at $logicalWidth dp/$scale", node.boundsInRoot.left >= bar.left - 1 && node.boundsInRoot.right <= bar.right + 1)
-                assertTrue("$key width ${node.size.width}", node.size.width >= 24)
-            }
+            val first = rule.onNodeWithTag("compat-toolbar-command-${savedItems.first { it.active }.key}")
+                .assertIsDisplayed().fetchSemanticsNode()
+            assertTrue("button width ${first.size.width}", first.size.width >= 40)
             val other = rule.onNodeWithTag("compat-toolbar-command-other").fetchSemanticsNode().boundsInRoot
             assertEquals(bar.right, other.right, 1f)
-            rule.onNodeWithTag("scrollable-toolbar-more-end").assertDoesNotExist()
+            assertEquals(40f, other.width, 1f)
+            rule.onNodeWithTag("scrollable-toolbar-more-end").assertIsDisplayed()
         }
         assertStoredItemsUnchanged()
     }
 
     @Test fun allOnScrollsWithAHintWhileOtherStaysReachable() {
-        // All 13 catalog commands still fit at 24dp on 375dp phones; a narrower bar must scroll.
+        // Buttons keep 40dp, so the bar scrolls.
         logicalWidthState.floatValue = 300f
         showCatalog(allOn = true)
         val other = rule.onNodeWithTag("compat-toolbar-command-other").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
         rule.onNodeWithTag("scrollable-toolbar-more-end").assertIsDisplayed()
         val scroll = rule.onNode(hasScrollAction() and hasAnyAncestor(catalogBar))
-        // The scroll range is only a few dp here; scroll by semantics to the last command.
+        // Scroll by semantics to the last command.
         scroll.performScrollToNode(hasTestTag("compat-toolbar-command-drawer"))
         rule.onNodeWithTag("compat-toolbar-command-drawer").assertIsDisplayed()
         rule.onNodeWithTag("scrollable-toolbar-more-start").assertIsDisplayed()

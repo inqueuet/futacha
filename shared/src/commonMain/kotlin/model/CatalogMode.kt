@@ -37,18 +37,18 @@ internal fun CatalogItem.matchesWatchWords(watchWords: List<String>): Boolean {
 }
 
 internal fun CatalogItem.matchesNormalizedWatchWords(normalizedWatchWords: List<String>): Boolean {
-    val titleText = normalizeWatchSearchText(title.orEmpty())
+    val titleText = normalizeCatalogSearchText(title.orEmpty())
     if (titleText.isEmpty()) return false
     return normalizedWatchWords.any { titleText.contains(it) }
 }
 
 /** Return user-entered labels in registration order, deduped by normalized value. */
 internal fun CatalogItem.matchedWatchWords(watchWords: List<String>): List<String> {
-    val titleText = normalizeWatchSearchText(title.orEmpty())
+    val titleText = normalizeCatalogSearchText(title.orEmpty())
     if (titleText.isEmpty()) return emptyList()
     val seen = mutableSetOf<String>()
     return watchWords.mapNotNull { raw ->
-        val normalized = normalizeWatchSearchText(raw)
+        val normalized = normalizeCatalogSearchText(raw)
         val label = raw.trim()
         label.takeIf {
             normalized.isNotBlank() && seen.add(normalized) && titleText.contains(normalized)
@@ -58,11 +58,14 @@ internal fun CatalogItem.matchedWatchWords(watchWords: List<String>): List<Strin
 
 internal fun normalizeWatchWords(watchWords: List<String>): List<String> {
     return watchWords
-        .mapNotNull { normalizeWatchSearchText(it).takeIf(String::isNotBlank) }
+        .mapNotNull { normalizeCatalogSearchText(it).takeIf(String::isNotBlank) }
         .distinct()
 }
 
-internal fun normalizeWatchSearchText(value: String): String {
+internal fun normalizeCatalogSearchText(value: String): String =
+    com.valoser.futacha.shared.compat.normalizeCompatCatalogMatchText(value)
+
+internal fun normalizeCatalogNgText(value: String): String {
     return buildString(value.length) {
         value.forEach { source ->
             val char = com.valoser.futacha.shared.util.canonicalCp932Character(source)
@@ -75,20 +78,6 @@ internal fun normalizeWatchSearchText(value: String): String {
             )
         }
     }.trim().lowercase()
-}
-
-/** Fold full-width katakana to hiragana for explicit catalog searches. */
-internal fun normalizeCatalogSearchText(value: String): String = buildString(value.length) {
-    normalizeWatchSearchText(value).forEach { char ->
-        append(
-            when (char) {
-                in '\u30A1'..'\u30F6' -> char - 0x60
-                '\u30FD' -> '\u309D'
-                '\u30FE' -> '\u309E'
-                else -> char
-            }
-        )
-    }
 }
 
 private fun List<CatalogItem>.filterAndSortByWatchWords(
@@ -114,7 +103,7 @@ private data class WatchWordMatch(
 )
 
 private fun CatalogItem.countNormalizedWatchWordMatches(normalizedWords: List<String>): Int {
-    val titleText = normalizeWatchSearchText(title.orEmpty())
+    val titleText = normalizeCatalogSearchText(title.orEmpty())
     if (titleText.isEmpty()) return 0
     return normalizedWords.count { titleText.contains(it) }
 }

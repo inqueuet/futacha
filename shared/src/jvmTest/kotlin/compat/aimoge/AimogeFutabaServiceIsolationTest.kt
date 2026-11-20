@@ -58,6 +58,32 @@ class AimogeFutabaServiceIsolationTest {
     }
 
     @Test
+    fun cacheSearchRetainsBodyMatchesAndFailureBeyondFourTerms() = runBlocking {
+        val before = com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled
+        com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled = true
+        val client = HttpClient(MockEngine { error("Unexpected request") })
+        try {
+            val id = aThread.substringAfterLast('/')
+            val row = com.valoser.futacha.shared.network.ArchiveSearchItem(
+                threadId = id, server = "aimoge", board = "aimoge", htmlUrl = aThread
+            )
+            val matched = mutableListOf<String>()
+            val failure = IllegalStateException("offline")
+            var reported: Throwable? = null
+            val results = searchCompatCatalogCacheRemote(client, aBoard, "赤 青 黒 白 紫 緑",
+                searchArchive = { term, _ -> if (term == "緑") throw failure else listOf(row) },
+                onRemoteTermMatch = { _, term -> matched += term },
+                onRemoteFailure = { reported = it })
+            assertEquals(listOf(id), results.getOrThrow().map { it.id })
+            assertEquals(listOf("赤", "青", "黒", "白", "紫"), matched)
+            assertEquals(failure, reported)
+        } finally {
+            client.close()
+            com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled = before
+        }
+    }
+
+    @Test
     fun theCacheSearchSendsNothingWhileAimogeIsOff() = runBlocking {
         val before = com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled
         com.valoser.futacha.shared.compat.AimogeAvailability.sitesEnabled = false

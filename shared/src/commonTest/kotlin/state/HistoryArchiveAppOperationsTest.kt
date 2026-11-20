@@ -22,6 +22,19 @@ class HistoryArchiveAppOperationsTest {
     private val json = Json { ignoreUnknownKeys = true }
 
     @Test
+    fun archiveClearKeepsRowsChangedAfterExport() = runBlocking {
+        val store = AppStateStore(FakePlatformStateStorage())
+        val original = historyEntry("111", visited = 1L)
+        store.setHistory(listOf(original))
+        val newer = original.copy(lastVisitedEpochMillis = 2L)
+        store.updateHistory { listOf(newer) }
+        assertEquals(null, store.clearHistoryIf { it == listOf(original) })
+        assertEquals(listOf(newer), store.readHistory())
+        assertEquals(listOf(newer), store.clearHistoryIf { it == listOf(newer) })
+        assertTrue(store.readHistory().isEmpty())
+    }
+
+    @Test
     fun exportAppHistoryArchive_usesSelectedEntriesWhenProvided() = runBlocking {
         val store = AppStateStore(FakePlatformStateStorage())
         store.setHistory(listOf(historyEntry("111"), historyEntry("222")))

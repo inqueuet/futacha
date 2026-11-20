@@ -116,8 +116,18 @@ internal const val FUTABER_CATALOG_TITLE_CHARS = MAX_COMPAT_CATALOG_TITLE_LINES
  * The layout of a ふたばー風 catalog fetch: the app's own (rows, columns, the visited mark: the same threads as before)
  * with the whole title. Passed with each request, so ふたちゃ and としあき(仮) keep fetching with their own layouts.
  */
-internal suspend fun futaberCatalogFetchSettings(repository: BoardRepository): CatalogFetchSettings =
-    repository.getCatalogFetchSettings().copy(titleLines = FUTABER_CATALOG_TITLE_CHARS)
+internal suspend fun futaberCatalogFetchSettings(repository: BoardRepository, threadCount: Int? = null): CatalogFetchSettings =
+    (threadCount?.let(::futaberCatalogThreadLayout) ?: repository.getCatalogFetchSettings())
+        .copy(titleLines = FUTABER_CATALOG_TITLE_CHARS)
+
+internal const val FUTABER_CATALOG_THREADS_MIN = 50
+internal const val FUTABER_CATALOG_THREADS_MAX = 3_000
+internal const val FUTABER_CATALOG_THREADS_DEFAULT = 300
+internal const val FUTABER_CATALOG_THREADS_STEP = 50
+
+/** may 1448736916: the layout asking for [threadCount] threads, the same wire value としあき(仮)'s スレッド数 sends. */
+internal fun futaberCatalogThreadLayout(threadCount: Int): CatalogFetchSettings =
+    com.valoser.futacha.shared.ui.compat.compatCatalogFetchSettings(threadCount)
 
 /**
  * One catalog fetch. Every sort but "監視" is the board's own catalog, as before; "監視" reads the new and the old
@@ -128,10 +138,11 @@ internal suspend fun futaberFetchCatalogPage(
     repository: BoardRepository,
     boardUrl: String,
     mode: CatalogMode,
-    watchWords: List<String>
+    watchWords: List<String>,
+    threadCount: Int? = null
 ): CatalogPageContent {
     if (mode == CatalogMode.WatchWords && normalizeWatchWords(watchWords).isEmpty()) return CatalogPageContent(emptyList())
-    val settings = futaberCatalogFetchSettings(repository)
+    val settings = futaberCatalogFetchSettings(repository, threadCount)
     if (mode != CatalogMode.WatchWords) return repository.getCatalogPageWithSettings(boardUrl, mode, settings)
     val page = loadCatalogItemsForMode(boardUrl, CatalogMode.WatchWords, watchWords) { url, sourceMode ->
         repository.getCatalogPageWithSettings(url, sourceMode, settings)
@@ -298,13 +309,13 @@ internal fun futaberCatalogBackActions(
 }
 
 /**
- * The thread menu's "キャッシュ検索", or null while it is not offered. A board without an official board key (the
+ * The thread menu's "過去スレ検索", or null while it is not offered. A board without an official board key (the
  * bundled tutorial board) shows it disabled ([enabled] false), as Futacha offers the search on official boards only:
  * searching would send the board's address to the outside server.
  */
 internal fun futaberCacheSearchMenuItem(open: (() -> Unit)?, enabled: Boolean, onDismiss: () -> Unit): FutaberMenuItem? =
     open?.let {
-        FutaberMenuItem("cache-search", "キャッシュ検索", androidx.compose.material.icons.Icons.Outlined.ManageSearch, enabled = enabled) {
+        FutaberMenuItem("cache-search", "過去スレ検索", androidx.compose.material.icons.Icons.Outlined.ManageSearch, enabled = enabled) {
             if (enabled) { onDismiss(); it() }
         }
     }
@@ -324,7 +335,7 @@ internal class FutaberCatalogExtras(
     val watchWords: List<String>,
     /** Rows added to the refresh button's sheet (before "キャンセル"). */
     val refreshActions: List<FutaberPostAction>,
-    /** The thread menu's "キャッシュ検索"; null while the extension is off or the shared store is missing. */
+    /** The thread menu's "過去スレ検索"; null while the extension is off or the shared store is missing. */
     val openCacheSearch: (() -> Unit)?,
     /** False on a board that is not an official one (the tutorial board): the entries are shown disabled. */
     val cacheSearchEnabled: Boolean,

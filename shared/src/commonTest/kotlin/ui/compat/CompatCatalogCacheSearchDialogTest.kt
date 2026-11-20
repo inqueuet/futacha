@@ -232,6 +232,7 @@ class CompatCatalogCacheSearchDialogTest {
     fun theCacheSearchAsksTheArchiveSearchPerTermFirstAndOpensTheOriginalThread() = runBlocking {
         val asked = mutableListOf<String>()
         var legacyAsked = false
+        val matched = mutableMapOf<String, MutableSet<String>>()
         val result = searchCompatCatalogCacheRemote(
             httpClient = HttpClient(MockEngine) { engine { addHandler { error("no network") } } },
             boardUrl = "https://may.2chan.net/b/futaba.php",
@@ -243,20 +244,22 @@ class CompatCatalogCacheSearchDialogTest {
                         threadId = if (term == "猫") "11" else "12",
                         server = "may",
                         board = "b",
-                        title = "$term スレ",
+                        title = "スレの題名",
                         htmlUrl = "https://may.inqueuet.com/b/$term.htm",
                         thumbUrl = "https://may.inqueuet.com/thumb.jpg",
                         replyCount = 120
                     )
                 )
             },
-            searchLegacy = { legacyAsked = true; Result.success(emptyList()) }
+            searchLegacy = { legacyAsked = true; Result.success(emptyList()) },
+            onRemoteTermMatch = { id, term -> matched.getOrPut(id) { mutableSetOf() }.add(term) }
         ).getOrThrow()
 
         assertEquals(listOf("may/b/猫", "may/b/鳥"), asked)
         assertEquals(listOf("11", "12"), result.map(CatalogItem::id))
         assertEquals("https://may.2chan.net/b/res/11.htm", result.first().threadUrl)
         assertEquals(120, result.first().replyCount)
+        assertEquals(mapOf("11" to setOf("猫"), "12" to setOf("鳥")), matched)
         assertTrue(!legacyAsked, "the old server is only a quiet fallback")
     }
 

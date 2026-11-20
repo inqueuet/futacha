@@ -213,9 +213,9 @@ internal fun FutaberThreadScreen(
     /** F-B3 E16: writes one preference (the tree view's switch from the operation menu). */
     onWritePreference: ((key: String, value: String) -> Unit)? = null,
     tabStrip: @Composable () -> Unit = {},
-    /** B7a: the operation menu's "キャッシュ検索" (the extension "キャッシュ検索・ブラウザ"); null leaves it out. */
+    /** B7a: the operation menu's "過去スレ検索" (the extension "過去スレ検索・ブラウザ"); null leaves it out. */
     onOpenCacheSearch: (() -> Unit)? = null,
-    /** False on a board that is not an official one: "キャッシュ検索" is shown disabled. */
+    /** False on a board that is not an official one: "過去スレ検索" is shown disabled. */
     cacheSearchEnabled: Boolean = true,
     /** B7b: the operation menu's "NGの詳細管理" (the extension "NGの詳細管理"); null leaves it out. */
     ngDetail: FutaberNgDetailEntry? = null,
@@ -643,6 +643,14 @@ internal fun FutaberThreadScreen(
             ?.let { listState.scrollToItem(it, ref.resumeOffset) }
         restored = true
     }
+    com.valoser.futacha.shared.ui.board.ThreadSearchJumpEffect(
+        threadUrl = { futaberCompatThreadUrl(board, ref.threadId) },
+        rows = rows,
+        ready = { !load.isLoading && !ngWaiting && (restored || rows.isEmpty()) },
+        onUnavailable = { remoteNotice = com.valoser.futacha.shared.ui.board.THREAD_SEARCH_JUMP_UNAVAILABLE },
+        matchesPost = { request, row -> request.matchesPost(row.post) },
+        onJump = { listState.requestScrollToItem(it) }
+    )
     // The position is saved after scrolling settles, never while a restore is pending.
     val latestSettled by rememberUpdatedState(onScrollSettled)
     val latestPosts by rememberUpdatedState(posts)

@@ -3,7 +3,8 @@ package com.valoser.futacha.shared.service
 internal class ThreadSaveMediaDownloadFailure(
     message: String,
     val retryable: Boolean,
-    cause: Throwable? = null
+    cause: Throwable? = null,
+    val httpStatus: Int? = null
 ) : Exception(message, cause)
 
 internal fun isThreadSaveMediaDownloadRetryable(error: Throwable?): Boolean {

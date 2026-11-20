@@ -374,6 +374,7 @@ suspend fun <T> withSharedBoardsRestore(
     appStateStore: AppStateStore?,
     keep: (T) -> Boolean,
     historyStore: AppStateStore? = appStateStore,
+    restoredHistoryUrls: () -> Set<String> = { emptySet() },
     block: suspend () -> T
 ): T = SharedBoardsSync.lock.withLock {
     val result = block()
@@ -390,8 +391,9 @@ suspend fun <T> withSharedBoardsRestore(
         com.valoser.futacha.shared.ui.compat.mergeRestoredBoardsIntoAppState(compat, appStateStore)
         // The restored history in every mode at once, a row deleted earlier included (plan B3). In としあき(仮) the boards
         // are not merged here ([appStateStore] is null) but the history still is ([historyStore]).
-        if (historyStore != null) {
-            runSuspendCatchingPreservingCancellation { mergeRestoredHistoryIntoAppState(compat, historyStore) }
+        val historyUrls = restoredHistoryUrls()
+        if (historyStore != null && historyUrls.isNotEmpty()) {
+            runSuspendCatchingPreservingCancellation { mergeRestoredHistoryIntoAppState(compat, historyStore, historyUrls) }
                 .onFailure { error -> Logger.e("SharedBoards", "Failed to merge the restored history", error) }
         }
         // AM-B5: an earlier-form あいもげ board brought back by the restore is moved now, not at the next start.

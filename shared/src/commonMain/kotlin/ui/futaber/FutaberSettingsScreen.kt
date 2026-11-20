@@ -959,6 +959,23 @@ private fun FutaberSettingsCatalogPage(settings: FutaberDisplaySettings, onSetti
             onSettingChange(FutaberSettingKeys.CATALOG_ROW_WIDE, "ON")
         }
     }
+    // may 1448736916: the other three modes let the catalog's size be chosen; ふたばー風 had no way to.
+    SettingsSection("取得するスレッド数") {
+        val count = settings.catalogThreadCount ?: FUTABER_CATALOG_THREADS_DEFAULT
+        StepperRow(
+            label = "スレッド数 = $count", tag = "catalog-thread-count", last = true,
+            canDecrease = count > FUTABER_CATALOG_THREADS_MIN,
+            canIncrease = count < FUTABER_CATALOG_THREADS_MAX,
+            onDecrease = {
+                onSettingChange(FutaberSettingKeys.CATALOG_THREAD_COUNT,
+                    (count - FUTABER_CATALOG_THREADS_STEP).coerceAtLeast(FUTABER_CATALOG_THREADS_MIN).toString())
+            },
+            onIncrease = {
+                onSettingChange(FutaberSettingKeys.CATALOG_THREAD_COUNT,
+                    (count + FUTABER_CATALOG_THREADS_STEP).coerceAtMost(FUTABER_CATALOG_THREADS_MAX).toString())
+            }
+        )
+    }
     SettingsSection(null) {
     SwitchRow(
         "カタログ更新時に先頭までスクロール", "catalog-scroll-top", settings.scrollCatalogToTopOnRefresh, last = true

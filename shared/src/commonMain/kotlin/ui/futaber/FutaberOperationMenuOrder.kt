@@ -57,7 +57,7 @@ internal data class FutaberMenuToggle(val active: Boolean, val enabled: Boolean 
 /**
  * Every item the menu has after the original's eleven (plan §4.1-1, L §2.2): this app's own items in their old order
  * (新着を待って読み上げ／スレッドを保存／URLを共有／ブラウザで開く／更新前に戻す／タブに追加／書き込む), then the
- * extensions in the order of the extensions page (レスを抽出・オートスクロール・URL・アーカイブ・キャッシュ検索・
+ * extensions in the order of the extensions page (レスを抽出・オートスクロール・URL・アーカイブ・過去スレ検索・
  * NGの詳細管理・1ページ上下・先頭へ・画像編集・動画編集). F-B2 turns this list into the second level behind
  * 「その他の機能」 in the 12th cell. Each item closes the menu ([close]) before it acts.
  */

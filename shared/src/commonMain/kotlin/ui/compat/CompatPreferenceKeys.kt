@@ -1,6 +1,12 @@
 package com.valoser.futacha.shared.ui.compat
 
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import com.valoser.futacha.shared.compat.BoardSite
+import com.valoser.futacha.shared.compat.CompatibilityStore
+import com.valoser.futacha.shared.compat.boardSiteOf
+import com.valoser.futacha.shared.state.AppStateStore
 import androidx.compose.runtime.setValue
 
 import com.valoser.futacha.shared.compat.COMPAT_THREAD_CACHE_PREFERENCE_KEY
@@ -99,6 +105,29 @@ internal fun Map<String, String>.compatCatalogLayout(
 internal fun compatCatalogLayoutStorageValue(
     layout: com.valoser.futacha.shared.compat.CompatCatalogLayout
 ): String = if (layout == com.valoser.futacha.shared.compat.CompatCatalogLayout.GRID) "0" else "1"
+
+@Composable
+internal fun rememberCompatPostDeleteKey(
+    preferences: Map<String, String>,
+    stateStore: AppStateStore?,
+    boardUrl: String
+): String {
+    val shared = if (boardSiteOf(boardUrl) == BoardSite.FUTABA) {
+        stateStore?.observedLastUsedDeleteKey?.collectAsState(initial = "")?.value
+    } else null
+    return shared?.takeIf { it.isNotBlank() } ?: preferences.compatStoredPostDeleteKey()
+}
+
+internal suspend fun CompatibilityStore.saveCompatPostDeleteKey(
+    stateStore: AppStateStore?,
+    boardUrl: String,
+    value: String
+) {
+    if (boardSiteOf(boardUrl) != BoardSite.FUTABA) return
+    val key = compatPostDeleteKeyForStorage(value)
+    stateStore?.setLastUsedDeleteKey(key)
+    savePreference(COMPAT_POST_DELETE_KEY_STORAGE_KEY, key)
+}
 
 internal fun compatPostDeleteKeyForStorage(value: String): String {
     return value.trim().take(COMPAT_POST_DELETE_KEY_MAX_LENGTH)

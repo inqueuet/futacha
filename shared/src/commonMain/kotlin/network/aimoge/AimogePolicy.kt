@@ -2,7 +2,7 @@ package com.valoser.futacha.shared.network.aimoge
 
 import com.valoser.futacha.shared.util.readResponseBody
 import io.ktor.client.HttpClient
-import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
 import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
@@ -69,16 +69,15 @@ class AimogePolicyApi(private val client: HttpClient) {
         get("$AIMOGE_API_BASE/thread-limits/${boardSlug.encodeURLPathPart()}", boardSlug)?.let(::parseAimogeThreadLimits)
 
     private suspend fun get(url: String, boardSlug: String): JsonObject? = try {
-        val response = readResponseBody { client.get(url) {
+        readResponseBody { client.prepareGet(url) {
             header("X-Api-Version", AIMOGE_API_VERSION)
             header(HttpHeaders.Accept, "application/json")
             header("X-Board-Key", boardSlug)
-        } }
-        if (!response.status.isSuccess()) null
-        else com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation {
+        }.execute { response ->
+            if (!response.status.isSuccess()) return@execute null
             val text = readAimogeControlBody(response)
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { policyJson.parseToJsonElement(text).jsonObject }
-        }.getOrNull()
+        } }
     } catch (e: CancellationException) {
         throw e
     } catch (_: Exception) {

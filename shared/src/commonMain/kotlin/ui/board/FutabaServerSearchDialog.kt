@@ -27,6 +27,7 @@ internal var aimogePostSearcher: suspend (slug: String, query: String) -> List<A
 
 @Composable
 internal fun FutabaServerSearchDialog(client: HttpClient, boardUrl: String, onDismiss: () -> Unit, onOpen: (CatalogItem) -> Unit) {
+    val jumpState = LocalThreadSearchJumpState.current
     val aimogeSlug = remember(boardUrl) { aimogePostSearchSlug(boardUrl) }
     val maxChars = if (aimogeSlug != null) com.valoser.futacha.shared.network.aimoge.AIMOGE_SEARCH_QUERY_MAX_CHARS else 200
     var query by remember(boardUrl) { mutableStateOf("") }
@@ -69,10 +70,16 @@ internal fun FutabaServerSearchDialog(client: HttpClient, boardUrl: String, onDi
                     Text(if (rows.isEmpty()) "該当するレスはありません" else "${rows.size}件")
                     LazyColumn(Modifier.fillMaxWidth().heightIn(max = 320.dp).testTag("futaba-server-search-results")) {
                         itemsIndexed(rows, key = { i, row -> "${row.postId}:$i" }) { _, row ->
-                            Column(Modifier.fillMaxWidth().clickable { onOpen(row.thread) }.padding(vertical = 10.dp)) {
+                            val canJump = jumpState != null && row.postId.isNotBlank()
+                            val action = if (canJump) "このレスへ移動" else "スレを開く"
+                            Column(Modifier.fillMaxWidth().clickable(onClickLabel = action) {
+                                jumpState?.select(row.thread.threadUrl, row.postId)
+                                onOpen(row.thread)
+                            }.padding(vertical = 10.dp)) {
                                 Text(if (aimogeSlug != null) (if (row.postId.isEmpty()) row.thread.title.orEmpty() else "No.${row.postId}") else "No.${row.postId}（スレ No.${row.thread.id}）", style = MaterialTheme.typography.labelLarge)
                                 if (row.date.isNotBlank()) Text(row.date, style = MaterialTheme.typography.labelSmall)
                                 Text(row.text, maxLines = 6)
+                                Text(action, style = MaterialTheme.typography.labelSmall)
                             }
                             HorizontalDivider()
                         }

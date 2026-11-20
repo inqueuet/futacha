@@ -33,6 +33,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.scrollBy
@@ -163,6 +164,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsPropertyKey
@@ -170,6 +172,7 @@ import androidx.compose.ui.semantics.SemanticsPropertyReceiver
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import coil3.compose.LocalPlatformContext
@@ -568,7 +571,13 @@ internal object CompatPostLayoutState {
     var extraSpacingDp by androidx.compose.runtime.mutableStateOf<Int?>(null)
     /** 「レスを押した時に色を付ける」（既定ON）。OFFで、押している間の灰色と波紋を出さない（may 1447434176：目がチカチカする）。 */
     var pressHighlight by androidx.compose.runtime.mutableStateOf(true)
+    /** 「自分の書き込みに左の線を引く」（既定OFF）。ふたったー風と同じく、自分のレスと自分への返信の左に幅2の線（aimg seq33-34）。 */
+    var ownPostLine by androidx.compose.runtime.mutableStateOf(false)
 }
+
+internal const val COMPAT_THREAD_OWN_POST_LINE_KEY = "threadOwnPostLine"
+private val COMPAT_OWN_POST_LINE_COLOR = Color(0xFFFF6E40)
+private val COMPAT_REPLY_TO_OWN_LINE_COLOR = Color(0xFF4CAF50)
 
 internal const val COMPAT_THREAD_PRESS_HIGHLIGHT_KEY = "threadPressHighlight"
 
@@ -816,6 +825,15 @@ internal fun CompatPostRow(
                 )
             )
             .background(if (searchHit) palette.searchResultBackground else Color.Transparent)
+            .then(
+                if (!CompatPostLayoutState.ownPostLine || !(isOwnPost || quotesOwnPost)) Modifier
+                else {
+                    val lineColor = if (isOwnPost) COMPAT_OWN_POST_LINE_COLOR else COMPAT_REPLY_TO_OWN_LINE_COLOR
+                    Modifier.testTag("compat-own-post-line").drawBehind {
+                        drawRect(lineColor, size = androidx.compose.ui.geometry.Size(2.dp.toPx(), size.height))
+                    }
+                }
+            )
             .then(if (CompatPostLayoutState.pressHighlight) Modifier.postPressFeedback(post.postNo, MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)) else Modifier)
     ) {
         newReplyCount?.takeIf { it > 0 }?.let { count ->
@@ -1411,7 +1429,13 @@ private fun CompatMessageText(
 }
 
 @Composable
-internal fun CompatThreadMetadataRow(tab: CompatTab, onClick: () -> Unit, onLongClick: () -> Unit) {
+internal fun CompatThreadMetadataRow(
+    tab: CompatTab,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    active: Boolean = false,
+    protected: Boolean = false
+) {
     val palette = LocalCompatibilityPalette.current
     val live = !tab.isDead
     val titleColor = when {
@@ -1424,8 +1448,12 @@ internal fun CompatThreadMetadataRow(tab: CompatTab, onClick: () -> Unit, onLong
     val noThumb = painterResource(Res.drawable.cmn_no_thumb)
     Row(
         modifier = Modifier.fillMaxWidth().height(COMPAT_REFERENCE_DRAWER_THREAD_ROW_DP.dp)
+            .then(if (active) Modifier.border(2.dp, palette.accent) else Modifier)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .semantics(mergeDescendants = true) { role = Role.Button }
+            .semantics(mergeDescendants = true) {
+                role = Role.Button
+                selected = active
+            }
             .testTag("compat-drawer-tab-row-${tab.key}")
             .padding(horizontal = 5.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -1458,6 +1486,7 @@ internal fun CompatThreadMetadataRow(tab: CompatTab, onClick: () -> Unit, onLong
                 modifier = Modifier.testTag("compat-drawer-tab-subtitle-${tab.key}")
             )
         }
+        if (protected) Text("保護", color = palette.text, fontSize = 12.sp)
         val status = com.valoser.futacha.shared.ui.board.threadStatusText(
             com.valoser.futacha.shared.model.ThreadStatus(tab.isDead, tab.isIsolated, tab.isDeleted, tab.isExploded))
         if (status.isNotEmpty()) Text(status, color = palette.text, fontSize = 12.sp, maxLines = 2,

@@ -3,9 +3,9 @@ package com.valoser.futacha.shared.network.aimoge
 import com.valoser.futacha.shared.util.readResponseBody
 import com.valoser.futacha.shared.compat.AIMOGE_HOST
 import io.ktor.client.HttpClient
-import io.ktor.client.request.delete
+import io.ktor.client.request.prepareDelete
 import io.ktor.client.request.header
-import io.ktor.client.request.post
+import io.ktor.client.request.preparePost
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
@@ -66,7 +66,7 @@ class AimogeAuthApi(private val client: HttpClient) {
             put("codeChallengeMethod", "S256")
         }
         val obj = send(AimogeAuthEndpoint.START, boardSlug) { url ->
-            client.post(url) { common(boardSlug); contentType(ContentType.Application.Json); setBody(body.toString()) }
+            client.preparePost(url) { common(boardSlug); contentType(ContentType.Application.Json); setBody(body.toString()) }
         } ?: throw AimogeAuthException(AimogeAuthEndpoint.START, 201)
         val id = obj.str("id")
         val expires = obj.str("expiresAt")?.let(::parseInstantMillis)
@@ -84,7 +84,7 @@ class AimogeAuthApi(private val client: HttpClient) {
             put("codeVerifier", codeVerifier)
         }
         val obj = send(AimogeAuthEndpoint.EXCHANGE, boardSlug) { url ->
-            client.post(url) { common(boardSlug); contentType(ContentType.Application.Json); setBody(body.toString()) }
+            client.preparePost(url) { common(boardSlug); contentType(ContentType.Application.Json); setBody(body.toString()) }
         } ?: throw AimogeAuthException(AimogeAuthEndpoint.EXCHANGE, 201)
         val credential = obj.str("credential")
         val id = obj.str("credentialId")
@@ -95,7 +95,7 @@ class AimogeAuthApi(private val client: HttpClient) {
 
     suspend fun revoke(boardSlug: String, credential: String) {
         send(AimogeAuthEndpoint.REVOKE, boardSlug) { url ->
-            client.delete(url) { common(boardSlug); header("x-aimg-token", credential) }
+            client.prepareDelete(url) { common(boardSlug); header("x-aimg-token", credential) }
         }
     }
 
@@ -108,7 +108,7 @@ class AimogeAuthApi(private val client: HttpClient) {
     private suspend fun send(
         endpoint: AimogeAuthEndpoint,
         boardSlug: String,
-        request: suspend (String) -> HttpResponse
+        request: suspend (String) -> io.ktor.client.statement.HttpStatement
     ): JsonObject? {
         require(boardSlug.isNotBlank())
         val path = when (endpoint) {
@@ -116,14 +116,19 @@ class AimogeAuthApi(private val client: HttpClient) {
             AimogeAuthEndpoint.EXCHANGE -> "/app-credentials"
             AimogeAuthEndpoint.REVOKE -> "/app-credentials/current"
         }
-        val response = try {
-            readResponseBody { request(AIMOGE_API_BASE + path) }
+        return try {
+            readResponseBody { request(AIMOGE_API_BASE + path).execute { response -> readAnswer(endpoint, response) } }
         } catch (e: CancellationException) {
+            throw e
+        } catch (e: AimogeAuthException) {
             throw e
         } catch (_: Exception) {
             // The transport's own text can name hosts and paths; it is dropped on purpose.
             throw AimogeAuthException(endpoint, null)
         }
+    }
+
+    private suspend fun readAnswer(endpoint: AimogeAuthEndpoint, response: HttpResponse): JsonObject? {
         val status = response.status.value
         val text = com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation { readAimogeControlBody(response) }.getOrNull()
         if (status !in 200..299) throw AimogeAuthException(endpoint, status, parseAimogeErrorBody(text).code)

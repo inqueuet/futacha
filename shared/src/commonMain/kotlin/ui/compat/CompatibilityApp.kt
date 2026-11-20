@@ -7,7 +7,10 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import coil3.network.ktor3.asNetworkClient
+import com.valoser.futacha.shared.compat.compatTabProtectionKey
+import com.valoser.futacha.shared.compat.isCompatTabProtected
 import com.valoser.futacha.shared.compat.BoardSite
 import com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrl
 import com.valoser.futacha.shared.compat.compatSiteArchiveLoader
@@ -1002,7 +1005,19 @@ private fun CompatibilityAppContent(
         entries = entries
     )
 
-    fun dispatch(event: CompatibilityEvent, keepMixReturn: Boolean = false) {
+    fun dispatch(requested: CompatibilityEvent, keepMixReturn: Boolean = false) {
+        val event = when (requested) {
+            is CompatibilityEvent.CloseTab -> {
+                if (preferences.isCompatTabProtected(requested.tabKey)) return
+                requested
+            }
+            is CompatibilityEvent.CloseTabs -> {
+                val keys = requested.tabKeys.filterNot(preferences::isCompatTabProtected).toSet()
+                if (keys.isEmpty()) return
+                requested.copy(tabKeys = keys)
+            }
+            else -> requested
+        }
         mixOverlayId = compatMixIdAfterNavigation(mixOverlayId, event, keepMixReturn)
         if (
             event == CompatibilityEvent.Back &&
@@ -2405,6 +2420,13 @@ private fun CompatibilityAppContent(
             // swipe never flashes the default tab page (#41).
             page = pageOverride ?: state.drawerPage ?: preferredDrawerPage(),
             tabs = distinctCompatTabs(state.tabs),
+            activeTabKey = state.activeTabKey,
+            isTabProtected = preferences::isCompatTabProtected,
+            onTabProtectionChange = { tab, protected ->
+                launchStoreSafely("tab protection update", "スレの保護を変更できませんでした") {
+                    store.savePreference(compatTabProtectionKey(tab.key), if (protected) "ON" else "OFF")
+                }
+            },
             histories = histories,
             externalWatcherSnapshot = externalWatcherSnapshot,
             // ModalNavigationDrawer keeps drawerContent composed while it is
@@ -2441,9 +2463,9 @@ private fun CompatibilityAppContent(
             },
             onCheckDeadTabs = { protectFavorites ->
                 checkCompatDeadTabCloseKeys(
-                    tabs = store.tabs.first(),
+                    tabs = store.tabs.first().filterNot { preferences.isCompatTabProtected(it.key) },
                     protectFavorites = protectFavorites,
-                    currentTabs = { store.tabs.first() },
+                    currentTabs = { store.tabs.first().filterNot { preferences.isCompatTabProtected(it.key) } },
                     probeGone = { url -> repository?.probeThreadGone(url) == true }
                 )
             },
@@ -2876,6 +2898,7 @@ private fun CompatibilityAppContent(
                         CompatThreadScreen(
                             stateStore = stateStore,
                             tab = tab,
+                            tabProtected = preferences.isCompatTabProtected(tab.key),
                             tabs = distinctCompatTabs(state.tabs),
                             isDrawerOpen = drawerState.currentValue == DrawerValue.Open,
                             onDrawerGestureAvailabilityChanged = { threadDrawerOpeningAllowed = it },
@@ -3126,6 +3149,7 @@ private fun CompatibilityAppContent(
                             } else repository,
                             httpClient = httpClient,
                             store = store,
+                            stateStore = stateStore,
                         toolbarRefreshToken = toolbarRefreshToken,
                         onPostSent = {
                             pendingPostRefreshTabs.add(tab.key)
@@ -3181,6 +3205,7 @@ private fun CompatibilityAppContent(
                         } else repository,
                         httpClient = httpClient,
                         store = store,
+                        stateStore = stateStore,
                         toolbarRefreshToken = toolbarRefreshToken,
                         preferences = preferences,
                         appVersion = appVersion,
@@ -5840,6 +5865,7 @@ private fun CompatThreadAutoScrollEffect(
 private fun CompatThreadScreen(
     stateStore: AppStateStore?,
     tab: CompatTab,
+    tabProtected: Boolean,
     tabs: List<CompatTab>,
     isDrawerOpen: Boolean = false,
     onDrawerGestureAvailabilityChanged: (Boolean) -> Unit,
@@ -5898,6 +5924,8 @@ private fun CompatThreadScreen(
     onOpenArchiveItem: (ArchiveSearchItem) -> Unit,
     onBack: () -> Unit
 ) {
+    val deleteKeyBoardUrl = com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrl(tab.canonicalUrl)?.canonicalBoardUrl.orEmpty()
+    val storedPostDeleteKey = rememberCompatPostDeleteKey(preferences, stateStore, deleteKeyBoardUrl)
     val scope = rememberCoroutineScope()
     val reviewComplianceEnabled = LocalIosReviewCompliance.current.isEnabled
     // Do not seed LazyListState from the persisted anchor while the thread is
@@ -5954,8 +5982,10 @@ private fun CompatThreadScreen(
     val threadPostSpacing = preferences.compatPreferenceValue("thread", "threadPostSpacing", "レス間の余白")
         ?.toIntOrNull()?.coerceIn(0, 20)
     val threadPressHighlight = preferences.compatPreferenceValue("thread", COMPAT_THREAD_PRESS_HIGHLIGHT_KEY, "レスを押した時に色を付ける") != "OFF"
+    val threadOwnPostLine = preferences.compatPreferenceValue("thread", COMPAT_THREAD_OWN_POST_LINE_KEY, "自分の書き込みに左の線を引く") == "ON"
     SideEffect {
         CompatPostLayoutState.pressHighlight = threadPressHighlight
+        CompatPostLayoutState.ownPostLine = threadOwnPostLine
         CompatPostLayoutState.headerFontSp = threadHeaderFontSize
         CompatPostLayoutState.extraSpacingDp = threadPostSpacing
     }
@@ -6852,7 +6882,7 @@ private fun CompatThreadScreen(
                     readAloudThreadGone = primaryThreadGone
                     if (
                         committed && !loadedFromArchive &&
-                        preferences[com.valoser.futacha.shared.compat.ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY] != "OFF"
+                        preferences[com.valoser.futacha.shared.compat.ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY] == "ON"
                     ) {
                         runSuspendCatchingPreservingCancellation {
                             store.enqueueArchiveReport(tab.originalUrl, now)
@@ -7169,6 +7199,7 @@ private fun CompatThreadScreen(
     }
 
     var scrollRestoreCompleted by remember(tab.key) { mutableStateOf(false) }
+    var searchJumpRenderedSnapshot by remember(tab.key) { mutableStateOf<CompatThreadSnapshot?>(null) }
     val threadNgFilterCache = remember(tab.key) { CompatThreadNgFilterCacheHolder() }
     LaunchedEffect(
         snapshot?.revision,
@@ -7286,6 +7317,7 @@ private fun CompatThreadScreen(
                 headerCount
             )?.let { target -> listState.scrollToItem(target.index, target.offsetPx) }
         }
+        searchJumpRenderedSnapshot = filteringSnapshot
     }
 
     fun buildCurrentScrollAnchor(
@@ -7402,6 +7434,16 @@ private fun CompatThreadScreen(
         scrollRestoreCompleted = true
     }
 
+    com.valoser.futacha.shared.ui.board.ThreadSearchJumpEffect(
+        threadUrl = { tab.canonicalUrl },
+        rows = visiblePosts,
+        ready = {
+            !loading && searchJumpRenderedSnapshot === snapshot && (scrollRestoreCompleted || visiblePosts.isEmpty())
+        },
+        onUnavailable = { error = com.valoser.futacha.shared.ui.board.THREAD_SEARCH_JUMP_UNAVAILABLE },
+        matchesPost = { request, post -> request.matchesPost(post.postNo, post.displayNumber) },
+        onJump = { listState.requestScrollToItem(compatThreadListIndexOfPost(it, threadHeaderCount)) }
+    )
     val latestVisiblePosts by rememberUpdatedState(visiblePosts)
     val latestSnapshot by rememberUpdatedState(snapshot)
     val latestScrollRestoreCompleted by rememberUpdatedState(scrollRestoreCompleted)
@@ -7681,6 +7723,10 @@ private fun CompatThreadScreen(
         }
     }
     fun closeCurrentThread() {
+        if (tabProtected) {
+            error = "このスレは保護されています"
+            return
+        }
         if (scrollRestoreCompleted && visiblePosts.isNotEmpty()) {
             onScrollAnchorObserved(tab.key, buildCurrentScrollAnchor(visiblePosts, snapshot))
         }
@@ -7691,12 +7737,14 @@ private fun CompatThreadScreen(
     // app start. Include it in the key so that case automatically retries
     // instead of waiting for the toolbar reload button.
     val reloadOnOpen = preferences.threadReloadOnOpenEnabled()
+    val searchJumpState = com.valoser.futacha.shared.ui.board.LocalThreadSearchJumpState.current
     LaunchedEffect(tab.key, repository, threadRefreshToken, reloadOnOpen) {
         load(
             manual = false,
             // A successful post forces one refresh even when automatic reopening is OFF.
             // Consume it first so ON does not leave the request pending through short-circuiting.
-            refreshOnActivation = consumePostRefreshRequest() || (reloadOnOpen && !reloadOnOpenSuppressed)
+            refreshOnActivation = consumePostRefreshRequest() || searchJumpState?.pending?.matches(tab.canonicalUrl) == true ||
+                (reloadOnOpen && !reloadOnOpenSuppressed)
         )
     }
     // Not keyed on the post count or on `loading` once a snapshot exists: a
@@ -8407,8 +8455,11 @@ private fun CompatThreadScreen(
                     value = compatThreadCatalogStatus(tab, store.loadDroppedCatalogItems(tab.boardKey))
                 }
                 catalogStatus?.let { status -> CompatThreadStatusBand(status, Modifier.align(Alignment.TopCenter)) }
-                openingNotice?.let { Text(it, Modifier.align(Alignment.BottomCenter).background(Color(0xFF343434))
-                    .padding(12.dp).testTag("compat-thread-opening-summary"), color = Color.White) }
+                // may 1448793302: at the bottom it covered the posts; shown in the middle like this screen's other notices.
+                // An error takes the middle; the opening notice then gives way so the two never overlap.
+                if (error == null) openingNotice?.let { Text(it, Modifier.align(Alignment.Center).padding(horizontal = 24.dp)
+                    .background(Color(0xFF343434).copy(alpha = 0.92f), RoundedCornerShape(22.dp))
+                    .padding(horizontal = 16.dp, vertical = 12.dp).testTag("compat-thread-opening-summary"), color = Color.White) }
                 error?.let { Text(it, modifier = Modifier.align(Alignment.Center).background(Color(0xFF646464), RoundedCornerShape(22.dp)).padding(12.dp), color = Color.White) }
             }
             // The OVER selector is owned by the Activity-level workspace in
@@ -8710,6 +8761,7 @@ private fun CompatThreadScreen(
         threadPrivacyAlpha = threadPrivacyAlpha,
         reviewComplianceEnabled = reviewComplianceEnabled,
         preferences = preferences,
+        storedPostDeleteKey = storedPostDeleteKey,
         openUrl = openUrl,
         openQuotePopup = ::openQuotePopup,
         openViewerFromMediaUrl = ::openViewerFromMediaUrl,
@@ -8737,6 +8789,7 @@ private fun CompatThreadScreen(
             tab = tab,
             repository = repository,
             preferences = preferences,
+            storedPostDeleteKey = storedPostDeleteKey,
             reviewComplianceEnabled = reviewComplianceEnabled,
             scope = scope,
             onOpenPostWithText = onOpenPostWithText,
@@ -8875,10 +8928,7 @@ private fun CompatThreadScreen(
                     val imageOnly = deleteImageOnly
                     deletePost = null
                     launchThreadStoreSafely("post deletion", "削除処理に失敗しました") {
-                        store.savePreference(
-                            COMPAT_POST_DELETE_KEY_STORAGE_KEY,
-                            compatPostDeleteKeyForStorage(password)
-                        )
+                        store.saveCompatPostDeleteKey(stateStore, deleteKeyBoardUrl, password)
                         if (repository == null) error = "通信機能を初期化できませんでした"
                         else runSuspendCatchingPreservingCancellation {
                             repository.deleteByUser(tab.originalUrl, tab.threadNo, post.postNo, password, imageOnly)
@@ -9216,6 +9266,7 @@ private fun CompatThreadQuotePopups(
     threadPrivacyAlpha: Float,
     reviewComplianceEnabled: Boolean,
     preferences: Map<String, String>,
+    storedPostDeleteKey: String,
     openUrl: (String) -> Unit,
     openQuotePopup: (Int, String) -> Unit,
     openViewerFromMediaUrl: (String, CompatPostSnapshot) -> Boolean,
@@ -9356,7 +9407,7 @@ private fun CompatThreadQuotePopups(
                 if (frame.query == "extract:${CompatExtractionKind.NG.name}") {
                     when (compatNgExtractionAction(isLongClick = true)) {
                         CompatNgExtractionAction.REQUEST_USER_DELETE -> {
-                            deletePassword = preferences.compatStoredPostDeleteKey()
+                            deletePassword = storedPostDeleteKey
                             deleteImageOnly = false
                             deletePost = post
                         }
@@ -9381,6 +9432,7 @@ private fun CompatThreadPostContextDialog(
     tab: CompatTab,
     repository: BoardRepository?,
     preferences: Map<String, String>,
+    storedPostDeleteKey: String,
     reviewComplianceEnabled: Boolean,
     scope: CoroutineScope,
     onOpenPostWithText: (String, Boolean) -> Unit,
@@ -9440,7 +9492,7 @@ private fun CompatThreadPostContextDialog(
             }
         },
         onDelete = {
-            deletePassword = preferences.compatStoredPostDeleteKey()
+            deletePassword = storedPostDeleteKey
             deleteImageOnly = false
             deletePost = post
             contextPost = null
@@ -10410,9 +10462,14 @@ private fun CompatToolbarButton(
     modifier: Modifier
 ) {
     val refreshing = command.key in refreshingCommandKeys
+    // A clear white flash while pressed, like the original (aimg seq31); the teal ripple was hard to see.
+    val pressSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val pressed by pressSource.collectIsPressedAsState()
     Box(
         modifier = modifier.testTag("compat-toolbar-command-${command.key}")
-            .clickable(enabled = command.onClick != null && !refreshing, role = Role.Button,
+            .background(if (pressed) Color.White.copy(alpha = 0.45f) else Color.Transparent)
+            .clickable(interactionSource = pressSource, indication = null,
+                enabled = command.onClick != null && !refreshing, role = Role.Button,
                 onClickLabel = command.label, onClick = command.onClick ?: {})
             .semantics { if (command.showUpdateBadge) stateDescription = "更新あり" },
         contentAlignment = Alignment.Center
@@ -10862,6 +10919,9 @@ private const val COMPAT_DRAWER_VISIBLE_TAB_LIMIT = 50
 private fun CompatNavigationDrawer(
     page: CompatDrawerPage,
     tabs: List<CompatTab>,
+    activeTabKey: String?,
+    isTabProtected: (String) -> Boolean,
+    onTabProtectionChange: (CompatTab, Boolean) -> Unit,
     histories: List<CompatHistoryEntry>,
     externalWatcherSnapshot: CompatExternalWatcherSnapshot,
     pendingClose: ClosedTabBatch?,
@@ -10963,11 +11023,14 @@ private fun CompatNavigationDrawer(
                                 items(displayedTabs, key = { it.key }) { tab ->
                                     CompatDismissibleDrawerRow(
                                         itemKey = tab.key,
+                                        enabled = !isTabProtected(tab.key),
                                         onDismissed = { onTabsClosed(setOf(tab.key)) },
                                         allowRightSwipeOnly = true
                                     ) {
                                         CompatThreadMetadataRow(
                                             tab = tab,
+                                            active = tab.key == activeTabKey,
+                                            protected = isTabProtected(tab.key),
                                             onClick = { onTabSelected(tab) },
                                             onLongClick = { contextTab = tab }
                                         )
@@ -11137,12 +11200,15 @@ private fun CompatNavigationDrawer(
             contextTab = null
             if (keys.isNotEmpty()) onTabsClosed(keys)
         }
+        val protected = isTabProtected(selected.key)
+        val protectionLabel = if (protected) "スレの保護を解除" else "スレを保護"
         CompatLegacyChoiceDialog(
             onDismiss = { contextTab = null },
-            choices = compatDrawerTabContextLabels(),
+            choices = listOf(protectionLabel) + compatDrawerTabContextLabels(),
             testTag = "compat-drawer-tab-context-menu",
             onChoice = { choice ->
                 when (choice) {
+                    protectionLabel -> onTabProtectionChange(selected, !protected)
                     "お気に入り" -> onTabFavoriteToggle(selected)
                     "削除する" -> closeCandidates(CompatDrawerTabCloseAction.SELECTED)
                     "下のスレを全て削除する" -> closeCandidates(CompatDrawerTabCloseAction.BELOW)

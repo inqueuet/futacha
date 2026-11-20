@@ -243,6 +243,13 @@ internal expect suspend fun renderCompatDrawingPng(
 @Composable
 internal expect fun CompatDrawingLandscapeEffect()
 
+/** aimg seq46: true where [CompatDrawingLandscapeEffect] really turns the screen (Android). */
+internal expect val compatCanForceLandscape: Boolean
+
+/** aimg seq46: turns the screen landscape while composed (the viewer's 90° video button). */
+@androidx.compose.runtime.Composable
+internal expect fun CompatVideoLandscapeEffect()
+
 @Composable
 internal expect fun rememberCompatVideoAttachmentPreviewLauncher(
     onError: (String) -> Unit

@@ -62,8 +62,11 @@ internal actual fun NativePlatformVideoPlayer(
     var player by remember(context) { mutableStateOf<ExoPlayer?>(null) }
     // What the screen drives: the player, with its audio focus and this app's reading aloud handled (L117).
     var videoAudio by remember(context) { mutableStateOf<AppVideoAudio?>(null) }
+    // A hardware decoder that fails while decoding (not at start-up, which the decoder fallback
+    // covers) gets one retry with the software decoders from where playback stopped (2026-11-19).
+    var softwareRetry by remember(context, videoUrl, playback, editing) { mutableStateOf<SoftwareDecoderRetry?>(null) }
 
-    DisposableEffect(context, videoUrl, playback, editing) {
+    DisposableEffect(context, videoUrl, playback, editing, softwareRetry != null) {
         val pin = playback?.retain()
         val editPin = editing?.retain()
         val renderersFactory = DefaultRenderersFactory(context)
@@ -72,7 +75,7 @@ internal actual fun NativePlatformVideoPlayer(
                 // API 37 emulator images currently expose goldfish hardware decoders that
                 // advertise support but fail while queueing the first buffers. Prefer the
                 // platform software codecs there; physical devices retain hardware decode.
-                if (isAndroidEmulator()) {
+                if (isAndroidEmulator() || softwareRetry != null) {
                     setMediaCodecSelector(MediaCodecSelector.PREFER_SOFTWARE)
                     forceDisableMediaCodecAsynchronousQueueing()
                 }
@@ -117,7 +120,9 @@ internal actual fun NativePlatformVideoPlayer(
         editing?.let { activePlayer.setVideoEffects(listOf(MosaicEffect(AtomicReference(it.document), it.info.frames.timeAt(0)))) }
         activePlayer.setMediaItem(mediaItem)
         editing?.let { activePlayer.seekTo(((it.startUs - it.info.frames.timeAt(0)).coerceAtLeast(0)) / 1000) }
-        (videoAudio?.player ?: activePlayer).playWhenReady = editing != null || options.autoPlay
+        val retry = softwareRetry
+        if (retry != null && editing == null && retry.positionMs > 0) activePlayer.seekTo(retry.positionMs)
+        (videoAudio?.player ?: activePlayer).playWhenReady = editing != null || options.autoPlay || retry?.wasPlaying == true
         activePlayer.prepare()
     }
 
@@ -227,6 +232,14 @@ internal actual fun NativePlatformVideoPlayer(
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                if (softwareRetry == null && error.errorCode in RETRYABLE_DECODER_ERRORS) {
+                    softwareRetry = SoftwareDecoderRetry(
+                        positionMs = activePlayer.currentPosition.coerceAtLeast(0L),
+                        wasPlaying = activePlayer.playWhenReady
+                    )
+                    currentCallback(VideoPlayerState.Buffering)
+                    return
+                }
                 currentErrorCallback(
                     VideoPlaybackError(
                         code = "${error.errorCodeName} (${error.errorCode})",
@@ -282,5 +295,13 @@ private fun isAndroidEmulator(): Boolean {
         model.contains("emulator") ||
         product.contains("sdk_gphone")
 }
+
+private class SoftwareDecoderRetry(val positionMs: Long, val wasPlaying: Boolean)
+
+private val RETRYABLE_DECODER_ERRORS = setOf(
+    PlaybackException.ERROR_CODE_DECODING_FAILED,
+    PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+    PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED
+)
 
 internal actual val platformVideoAutoPlayByDefault: Boolean = false

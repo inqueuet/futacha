@@ -7,6 +7,7 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import androidx.compose.ui.unit.Density
 import androidx.compose.foundation.layout.widthIn
 
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
@@ -27,6 +28,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.scrollBy
@@ -718,7 +720,26 @@ internal fun CompatTabSelector(
         tab = tab
     )
 
+    // aimg seq45: coming back from another screen recreated the row at the first tab, so the thread being read
+    // could sit off screen. Bring the current tab into view whenever it is not (and only then).
+    val selectorListState = rememberLazyListState()
+    val currentTabIndex = uniqueTabs.indexOfFirst { it.key == currentTabKey }
+    LaunchedEffect(currentTabKey, currentTabIndex, uniqueTabs.size) {
+        if (currentTabIndex < 0) return@LaunchedEffect
+        val target = compatSelectorScrollTarget(
+            currentIndex = currentTabIndex,
+            visibleIndexes = selectorListState.layoutInfo.visibleItemsInfo
+                .filter { item ->
+                    item.offset >= selectorListState.layoutInfo.viewportStartOffset &&
+                        item.offset + item.size <= selectorListState.layoutInfo.viewportEndOffset
+                }
+                .map { it.index },
+            visibleCount = selectorListState.layoutInfo.visibleItemsInfo.size
+        ) ?: return@LaunchedEffect
+        selectorListState.scrollToItem(target)
+    }
     LazyRow(
+        state = selectorListState,
         modifier = modifier
             .fillMaxWidth()
             .height(40.dp)
@@ -898,6 +919,18 @@ private val CompatAccelerateDecelerateEasing = Easing { fraction ->
 
 @Composable
 private fun CompatTabSelectorCell(tab: CompatTab, active: Boolean, threadContext: Boolean, privacyAlpha: Float = 1f) {
+    // The cell is a fixed 60x40dp picture with a 16dp title band.  With the
+    // system text size at its largest the labels outgrew the band and were
+    // cut off (aimg 01a1ec77 seq16).  The title stays readable through the
+    // semantics below, so the drawn labels keep their own size here.
+    val density = LocalDensity.current
+    CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale = 1f)) {
+        CompatTabSelectorCellContent(tab, active, threadContext, privacyAlpha)
+    }
+}
+
+@Composable
+private fun CompatTabSelectorCellContent(tab: CompatTab, active: Boolean, threadContext: Boolean, privacyAlpha: Float) {
     val palette = LocalCompatibilityPalette.current
     val status = com.valoser.futacha.shared.ui.board.threadStatusText(
         com.valoser.futacha.shared.model.ThreadStatus(tab.isDead, tab.isIsolated, tab.isDeleted, tab.isExploded))
@@ -936,6 +969,12 @@ private fun CompatTabSelectorCell(tab: CompatTab, active: Boolean, threadContext
                 modifier = Modifier.testTag("compat-tab-title-${tab.key}")
             )
         }
+        // The thread being read gets a frame so it can be found in the list (may 1448734840).
+        if (threadContext && active) Box(
+            Modifier.matchParentSize()
+                .border(2.dp, Color(0xFFFF9800), androidx.compose.foundation.shape.RoundedCornerShape(3.dp))
+                .testTag("compat-tab-current-frame-${tab.key}")
+        )
         if (status.isNotEmpty()) Text(
             com.valoser.futacha.shared.ui.board.threadStatusBadgeText(
                 com.valoser.futacha.shared.model.ThreadStatus(tab.isDead, tab.isIsolated, tab.isDeleted, tab.isExploded)),
@@ -963,3 +1002,12 @@ internal fun compatRefreshAllTabsDoneNotice(result: com.valoser.futacha.shared.c
         append("）")
         append(result.unfinishedNotice)
     }
+
+/**
+ * aimg seq45: the first item to scroll to so the current tab is fully in view, or null when it already is. The current
+ * tab goes near the middle so its neighbours stay visible.
+ */
+internal fun compatSelectorScrollTarget(currentIndex: Int, visibleIndexes: List<Int>, visibleCount: Int): Int? {
+    if (currentIndex < 0 || currentIndex in visibleIndexes) return null
+    return (currentIndex - (visibleCount.coerceAtLeast(1) / 2)).coerceAtLeast(0)
+}

@@ -72,7 +72,8 @@ internal fun FtutterSettingsHost(
     ngReasons: Map<String, String> = emptyMap(),
     /** フォントの選択・リセットの結果を出す。スコープはダイアログ・設定より長く生きるもの（アプリ）。 */
     appScope: kotlinx.coroutines.CoroutineScope? = null,
-    onNotice: (String) -> Unit = {}
+    onNotice: (String) -> Unit = {},
+    onArchiveReportEnabledChanged: (Boolean) -> Unit = {}
 ) {
     var stack by remember { mutableStateOf(listOf<FtutterSettingsRoute>(FtutterSettingsRoute.Root)) }
     var sharedPath by remember { mutableStateOf<String?>(null) }
@@ -132,6 +133,21 @@ internal fun FtutterSettingsHost(
                     }
                 }
                 item { FtutterNavRow("ネットワーク", "ftutter-shared-network") { sharedPath = "network" } }
+                if (!com.valoser.futacha.shared.util.isDesktop()) item {
+                    val reportKey = com.valoser.futacha.shared.compat.ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY
+                    FtutterCheckRow(
+                        com.valoser.futacha.shared.ui.board.VIEWED_THREAD_ARCHIVE_REPORT_LABEL,
+                        preferences[reportKey] == "ON",
+                        "ftutter-archive-report"
+                    ) { enabled ->
+                        fallbackScope.launch {
+                            com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation {
+                                services.store.savePreference(reportKey, if (enabled) "ON" else "OFF")
+                            }.onSuccess { onArchiveReportEnabledChanged(enabled) }
+                                .onFailure { onNotice("閲覧スレ通知の設定を保存できませんでした") }
+                        }
+                    }
+                }
                 item { FtutterNavRow("画像検索", "ftutter-shared-image-search") { sharedPath = "image_search" } }
                 item { FtutterNavRow("プライバシー表示", "ftutter-shared-privacy") { sharedPath = "privacy" } }
                 // 4モードどこからでも切り替えられるように（プロンプト・AIラベル、画像編集、動画編集。値は全モード共通）。

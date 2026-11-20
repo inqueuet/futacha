@@ -167,6 +167,7 @@ private object IosAppGraph {
     private val resourceLock = NSLock()
     val fileSystem by lazy { createFileSystem() }
     val stateStore by lazy { createAppStateStore(fileSystem = fileSystem) }
+    val stateSeeded = kotlinx.coroutines.flow.MutableStateFlow(false)
     val autoSavedThreadRepository by lazy {
         SavedThreadRepository(fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY)
     }
@@ -394,6 +395,7 @@ private object IosWatchSnapshotBridge {
     private val builder = WatchSnapshotBuilder()
     private val replyCountLock = NSLock()
     private val previousReplyCounts = mutableMapOf<WatchThreadKey, Int>()
+    private var lastAcknowledgedSnapshotMillis = 0L
     private val handledCommandIdsLock = NSLock()
     private val handledCommandIds = LinkedHashSet<String>()
     private val refreshController = IosWatchRefreshController(scope) {
@@ -416,7 +418,7 @@ private object IosWatchSnapshotBridge {
     fun requestSnapshotJson(completion: (String?) -> Unit) {
         scope.launch {
             val encoded = runSuspendCatchingPreservingCancellation {
-                val snapshot = buildSnapshot()
+                val snapshot = buildSnapshot() ?: return@runSuspendCatchingPreservingCancellation null
                 encodeWatchSnapshotWithinPayload(snapshot, IOS_WATCH_SNAPSHOT_PAYLOAD_MAX_BYTES) { candidate ->
                     json.encodeToString(WatchSnapshot.serializer(), candidate)
                 } ?: run {
@@ -445,6 +447,8 @@ private object IosWatchSnapshotBridge {
                 json.decodeFromString(WatchSnapshot.serializer(), snapshotJson)
             }.getOrNull() ?: return@launch
             withReplyCountLock {
+                if (snapshot.generatedAtMillis <= lastAcknowledgedSnapshotMillis) return@withReplyCountLock
+                lastAcknowledgedSnapshotMillis = snapshot.generatedAtMillis
                 val activeKeys = snapshot.threads.mapTo(mutableSetOf()) { thread ->
                     WatchThreadKey(thread.boardId, thread.boardUrl, thread.threadId)
                 }
@@ -578,9 +582,11 @@ private object IosWatchSnapshotBridge {
         }
     }
 
-    private suspend fun buildSnapshot(): WatchSnapshot {
+    private suspend fun buildSnapshot(): WatchSnapshot? {
+        val seeded = IosAppGraph.stateSeeded.value
         val boards = IosAppGraph.stateStore.boards.first()
         val history = IosAppGraph.stateStore.readHistory()
+        if (!seeded && boards.isEmpty() && history.isEmpty()) return null
         val watchWords = IosAppGraph.stateStore.watchWords.first()
         val previousCounts = withReplyCountLock { previousReplyCounts.toMap() }
         val snapshot = builder.build(
@@ -957,6 +963,7 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                         lastUsedDeleteKey = ""
                     )
                 )
+                IosAppGraph.stateSeeded.value = true
                 compatibilityStore.initialize()
                 if (issue78ArchiveFixture) {
                     seedIosIssue78ArchiveFixture(compatibilityStore)
@@ -983,7 +990,7 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                 com.valoser.futacha.shared.compat.shared.runSharedDataMigrations(stateStore, compatibilityStore)
                 // The modern history import runs after the first frame (below):
                 // reading up to 20k history files kept the screen blank for seconds.
-                if (compatibilityStore.loadPreference(ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY) != "OFF") {
+                if (compatibilityStore.loadPreference(ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY) == "ON") {
                     val startupProfile = profileStore.readActiveProfile()
                     val startupGeneration = profileStore.readGeneration()
                     IosArchiveReportScheduler.enqueueStartup(compatibilityStore) {
@@ -1050,7 +1057,7 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                     profileStore.activeProfile,
                     profileStore.generation
                 ) { backgroundEnabled, watchAlertEnabled, compatPreferences, profile, generation ->
-                    val archiveReportEnabled = compatPreferences[ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY] != "OFF"
+                    val archiveReportEnabled = compatPreferences[ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY] == "ON"
                     val compatEnabled = when (profile) {
                         ExperienceProfile.FUTACHA, ExperienceProfile.FUTABER, ExperienceProfile.FTUTTER -> false
                         ExperienceProfile.TOSHIAKI_COMPAT -> {
@@ -1493,7 +1500,7 @@ private suspend fun runIosBackgroundRefreshLocked(
                 preferences["compat.background.backgroundThreadExistCheck"]
             )
             val watchWordsEnabled = com.valoser.futacha.shared.compat.compatWatchAllowed(preferences, isCompatWifiConnected(null))
-            val archiveReportEnabled = preferences[ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY] != "OFF"
+            val archiveReportEnabled = preferences[ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY] == "ON"
             val wifi = isCompatWifiConnected(null)
             fun allowed(policy: CompatForegroundNetworkPolicy): Boolean = when (policy) {
                 CompatForegroundNetworkPolicy.ALWAYS -> true
@@ -1598,7 +1605,7 @@ private suspend fun runIosBackgroundRefreshLocked(
         val watchAlertEnabled = stateStore.isWatchAlertEnabled.first()
         val archiveStore = IosAppGraph.compatibilityStore
         archiveStore.initialize()
-        val archiveReportEnabled = archiveStore.loadPreference(ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY) != "OFF"
+        val archiveReportEnabled = archiveStore.loadPreference(ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY) == "ON"
         val sharedFeaturesEnabled = com.valoser.futacha.shared.compat.sharedFeatureRefreshEnabled(archiveStore.preferences.first())
         if (!backgroundEnabled && !watchAlertEnabled && !archiveReportEnabled && !sharedFeaturesEnabled) {
             Logger.d("BackgroundRefresh", "iOS background refresh disabled; skipping run")

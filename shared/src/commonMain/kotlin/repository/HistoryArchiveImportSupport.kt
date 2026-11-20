@@ -54,7 +54,8 @@ suspend fun importHistoryArchive(
     json: Json = Json {
         prettyPrint = true
         ignoreUnknownKeys = true
-    }
+    },
+    onEntryRestored: (ThreadHistoryEntry) -> Unit = {}
 ): Result<HistoryArchiveImportResult> = withContext(AppDispatchers.io) {
     // Callers launch from the UI scope; the manifest (up to 4 MB) and each
     // snapshot's metadata (up to 8 MB, 2,000 entries) are decoded here.
@@ -67,10 +68,8 @@ suspend fun importHistoryArchive(
         require(manifestSize in 0L..MAX_HISTORY_ARCHIVE_MANIFEST_BYTES) {
             "History archive manifest is too large"
         }
-        val manifestPayload = fileSystem.readString(manifestPath).getOrThrow()
-        require(manifestPayload.encodeToByteArray().size.toLong() <= MAX_HISTORY_ARCHIVE_MANIFEST_BYTES) {
-            "History archive manifest grew beyond its permitted size while reading"
-        }
+        val manifestPayload = fileSystem.readHistoryArchiveBytes(manifestPath, MAX_HISTORY_ARCHIVE_MANIFEST_BYTES)
+            .getOrThrow().decodeToString()
         val manifest = json.decodeFromString(
             HistoryArchiveManifest.serializer(),
             manifestPayload
@@ -149,7 +148,9 @@ suspend fun importHistoryArchive(
                 importStartedAtMillis = importStartedAtMillis,
                 json = json
             )
-            importedHistory += entry.historyEntry.copy(hasAutoSave = payloadResult.hasRestoredPayload)
+            val restoredEntry = entry.historyEntry.copy(hasAutoSave = payloadResult.hasRestoredPayload)
+            importedHistory += restoredEntry
+            onEntryRestored(restoredEntry)
             when {
                 !payloadResult.hasRestoredPayload -> historyOnlyCount += 1
                 payloadResult.isPartial -> partialPayloadCount += 1
@@ -240,9 +241,9 @@ private suspend fun restoreHistoryArchiveEntryPayload(
     ) {
         return RestoredHistoryArchivePayloadResult(hasRestoredPayload = false, isPartial = false)
     }
-    val metadataPayload = fileSystem.readString(fullMetadataPath).getOrNull()
+    val metadataBytes = fileSystem.readHistoryArchiveBytes(fullMetadataPath, declaredMetadataSize).getOrNull()
         ?: return RestoredHistoryArchivePayloadResult(hasRestoredPayload = false, isPartial = false)
-    val metadataPayloadSize = metadataPayload.encodeToByteArray().size.toLong()
+    val metadataPayloadSize = metadataBytes.size.toLong()
     if (
         metadataPayloadSize > MAX_HISTORY_ARCHIVE_METADATA_BYTES ||
         metadataPayloadSize != declaredMetadataSize
@@ -251,27 +252,23 @@ private suspend fun restoreHistoryArchiveEntryPayload(
     }
     val sourceMetadata = runCatching {
         requireSavedThreadMetadataWithinLimits(
-            json.decodeFromString(SavedThreadMetadata.serializer(), metadataPayload)
+            json.decodeFromString(SavedThreadMetadata.serializer(), metadataBytes.decodeToString())
         )
     }.getOrNull() ?: return RestoredHistoryArchivePayloadResult(hasRestoredPayload = false, isPartial = false)
 
-    val destinationStorageId = buildImportedHistoryStorageId(manifest.archiveId, entry.snapshotId)
-    // A snapshot folder this import creates is referenced only once it is indexed. When the
-    // import fails or is cancelled before that, remove the copied files instead of leaving an
-    // unreferenced folder behind. A folder already indexed by an earlier import is kept.
-    val wasIndexedBefore = runCatching {
-        destinationRepository.loadIndex().threads.any { resolveSavedThreadStorageId(it) == destinationStorageId }
-    }.getOrDefault(true)
+    val logicalStorageId = buildImportedHistoryStorageId(manifest.archiveId, entry.snapshotId)
+    val destinationStorageId = newImportedArchiveStorageId(logicalStorageId)
+    // Publish a complete revision through the index. Re-importing never writes into a live snapshot.
     var indexed = false
     try {
         val result = restoreHistoryArchiveEntryPayloadFiles(
             fileSystem, destinationRepository, archiveDirectory, entry, importStartedAtMillis, json,
-            metadataPath, sourceMetadata, destinationStorageId
+            metadataPath, sourceMetadata, destinationStorageId, logicalStorageId
         )
         indexed = result.hasRestoredPayload
         return result
     } finally {
-        if (!indexed && !wasIndexedBefore) {
+        if (!indexed) {
             withContext(NonCancellable) {
                 withTimeoutOrNull(30_000L) { destinationRepository.deletePath(destinationStorageId) }
             }
@@ -288,7 +285,8 @@ private suspend fun restoreHistoryArchiveEntryPayloadFiles(
     json: Json,
     metadataPath: String,
     sourceMetadata: SavedThreadMetadata,
-    destinationStorageId: String
+    destinationStorageId: String,
+    logicalStorageId: String
 ): RestoredHistoryArchivePayloadResult {
     val payloadRoot = metadataPath.substringBeforeLast('/', "")
     val nonMetadataFiles = entry.payloadFiles.filter { it.kind != HistoryArchiveFileKind.METADATA }
@@ -318,7 +316,7 @@ private suspend fun restoreHistoryArchiveEntryPayloadFiles(
             failedCopyCount += 1
             return@forEach
         }
-        val bytes = fileSystem.readBytes(sourcePath)
+        val bytes = fileSystem.readHistoryArchiveBytes(sourcePath, payloadFile.sizeBytes)
             .getOrElse {
                 failedCopyCount += 1
                 return@forEach
@@ -354,15 +352,19 @@ private suspend fun restoreHistoryArchiveEntryPayloadFiles(
         copiedSize,
         updatedMetadataPayload.encodeToByteArray().size.toLong()
     )
-    destinationRepository.addThreadSnapshotToIndex(
-        buildImportedSavedThread(
-            metadata = updatedMetadata.copy(totalSize = totalSize),
-            storageId = destinationStorageId,
-            totalSize = totalSize,
-            isPartial = failedCopyCount > 0 || entry.payloadStatus == HistoryArchivePayloadStatus.PARTIAL
-        ),
-        mutationStartedAtMillis = importStartedAtMillis
-    ).getOrThrow()
+    coroutineContext.ensureActive()
+    withContext(NonCancellable) {
+        destinationRepository.addThreadSnapshotToIndex(
+            buildImportedSavedThread(
+                metadata = updatedMetadata.copy(totalSize = totalSize),
+                storageId = destinationStorageId,
+                totalSize = totalSize,
+                isPartial = failedCopyCount > 0 || entry.payloadStatus == HistoryArchivePayloadStatus.PARTIAL
+            ),
+            mutationStartedAtMillis = importStartedAtMillis,
+            replacesArchiveStorageId = logicalStorageId
+        ).getOrThrow()
+    }
     return RestoredHistoryArchivePayloadResult(
         hasRestoredPayload = true,
         isPartial = failedCopyCount > 0 || entry.payloadStatus == HistoryArchivePayloadStatus.PARTIAL
@@ -446,3 +448,32 @@ private fun sanitizeImportedHistoryPathSegment(value: String): String {
         .ifBlank { "snapshot" }
         .take(80)
 }
+
+private const val IMPORTED_ARCHIVE_REVISION_SEPARATOR = "__revision_"
+
+@OptIn(kotlin.uuid.ExperimentalUuidApi::class)
+private fun newImportedArchiveStorageId(logicalId: String): String =
+    logicalId + IMPORTED_ARCHIVE_REVISION_SEPARATOR + kotlin.uuid.Uuid.random().toHexString()
+
+internal fun isImportedArchiveStorageRevision(storageId: String, logicalId: String): Boolean {
+    if (storageId == logicalId) return true
+    val prefix = logicalId + IMPORTED_ARCHIVE_REVISION_SEPARATOR
+    if (!storageId.startsWith(prefix)) return false
+    val revision = storageId.substring(prefix.length)
+    return revision.length == 32 && revision.all { it in '0'..'9' || it in 'a'..'f' }
+}
+
+internal suspend fun FileSystem.readHistoryArchiveBytes(path: String, maxBytes: Long): Result<ByteArray> =
+    readByteStream(path) { source ->
+        val out = okio.Buffer()
+        val chunk = ByteArray(8192)
+        while (true) {
+            coroutineContext.ensureActive()
+            val count = source.read(chunk, 0, minOf(chunk.size.toLong(), maxBytes - out.size + 1).toInt())
+            if (count < 0) break
+            check(count > 0) { "History archive read made no progress" }
+            require(count <= maxBytes - out.size) { "History archive file exceeds its permitted size" }
+            out.write(chunk, 0, count)
+        }
+        out.readByteArray()
+    }

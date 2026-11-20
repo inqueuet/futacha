@@ -969,6 +969,27 @@ private fun ThreadScreenContent(
         // the network page instead of persisting a wrong position (C5).
         isProvisionalContent = isShowingOfflineCopy && refreshThreadJob?.isActive == true
     )
+    val jumpRows = displayedPostsLayout.posts
+    ThreadSearchJumpEffect(
+        threadUrl = {
+            com.valoser.futacha.shared.compat.siteCanonicalBoardUrlOf(effectiveBoardUrl)
+                ?.let { com.valoser.futacha.shared.compat.siteThreadUrlOnBoard(it, threadId) }
+                ?: resolvedThreadUrlOverride.orEmpty()
+        },
+        rows = jumpRows,
+        ready = {
+            currentState is ThreadUiState.Error ||
+                (currentState is ThreadUiState.Success && !isRefreshing &&
+                    (!initialScrollRestoreState.shouldRestore || jumpRows.isEmpty()) &&
+                    currentState.page.posts.all {
+                        it.id in feedbackVisibleIds || it.id in ngHiddenPostIds ||
+                            it.id in displayedPostsLayout.collapsedPostIds
+                    })
+        },
+        onUnavailable = { coroutineScope.launch { snackbarHostState.showSnackbar(THREAD_SEARCH_JUMP_UNAVAILABLE) } },
+        matchesPost = { request, post -> request.matchesPost(post) },
+        onJump = { requestPostScroll(jumpRows[it]) }
+    )
     ThreadSearchIndexEffects(
         searchQuery = debouncedThreadSearchQuery,
         threadId = threadId,

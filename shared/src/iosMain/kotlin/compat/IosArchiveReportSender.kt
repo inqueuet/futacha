@@ -131,7 +131,7 @@ internal class IosArchiveReportOutboxProcessor(
         commitAllowed: suspend () -> Boolean = { true }
     ): Long? {
         if (!commitAllowed()) return null
-        if (store.loadPreference(ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY) == "OFF") return null
+        if (store.loadPreference(ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY) != "ON") return null
         val initialNow = Clock.System.now().toEpochMilliseconds()
         if (!commitAllowed()) return null
         store.maintainArchiveReportOutbox(initialNow)

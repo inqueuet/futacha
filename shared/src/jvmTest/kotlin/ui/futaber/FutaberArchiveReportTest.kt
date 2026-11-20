@@ -33,13 +33,15 @@ class FutaberArchiveReportTest {
     }
 
     @Test
-    fun aLiveReadOfAnOfficialThreadIsNotedOnceWithTheSwitchUnset() = withStore { store ->
+    fun aLiveReadOfAnOfficialThreadIsNotedOnceAfterOptIn() = withStore { store ->
         val sent = mutableListOf<Int>()
-        assertTrue(futaberNoteViewedThread(store, emptyMap(), may, "1001", { sent += it }, nowEpochMillis = 1_000L, desktop = false))
+        val on = mapOf(ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY to "ON")
+        assertFalse(futaberNoteViewedThread(store, emptyMap(), may, "1001", null, nowEpochMillis = 900L, desktop = false))
+        assertTrue(futaberNoteViewedThread(store, on, may, "1001", { sent += it }, nowEpochMillis = 1_000L, desktop = false))
         assertEquals(1, store.archiveReportOutboxStats().pendingOrRetry)
         assertEquals(listOf(1), sent)
         // The same thread again is not a second row (the host is still told what waits, as としあき(仮) does).
-        assertFalse(futaberNoteViewedThread(store, emptyMap(), may, "1001", { sent += it }, nowEpochMillis = 2_000L, desktop = false))
+        assertFalse(futaberNoteViewedThread(store, on, may, "1001", { sent += it }, nowEpochMillis = 2_000L, desktop = false))
         assertEquals(1, store.archiveReportOutboxStats().pendingOrRetry)
     }
 
@@ -58,9 +60,9 @@ class FutaberArchiveReportTest {
     @Test
     fun ふたちゃNotesThePageOnlyWhenItWasReadFromTheBoardNow() = withStore { store ->
         val url = "https://img.2chan.net/b/res/77.htm"
-        assertFalse(enqueueViewedThreadArchiveReport(store, url, null, liveFetch = false, nowEpochMillis = 1L, onEnqueued = null, desktop = false))
+        assertFalse(enqueueViewedThreadArchiveReport(store, url, "ON", liveFetch = false, nowEpochMillis = 1L, onEnqueued = null, desktop = false))
         assertEquals(0, store.archiveReportOutboxStats().total)
-        assertTrue(enqueueViewedThreadArchiveReport(store, url, null, liveFetch = true, nowEpochMillis = 1L, onEnqueued = null, desktop = false))
+        assertTrue(enqueueViewedThreadArchiveReport(store, url, "ON", liveFetch = true, nowEpochMillis = 1L, onEnqueued = null, desktop = false))
         assertEquals(1, store.archiveReportOutboxStats().pendingOrRetry)
     }
 }

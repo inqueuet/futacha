@@ -949,6 +949,8 @@ class CompatSettingsSchemaInstrumentedTest {
 
         rule.onNodeWithContentDescription("ドロワー").performClick()
         rule.onNodeWithContentDescription("開いているタブ").performClick()
+        val activeRow = rule.onNodeWithTag("compat-drawer-tab-row-${compatTabKey(threadUrl)}")
+        activeRow.assertIsSelected()
         rule.onNodeWithText("お気に入り済みのスレ").performTouchInput { longClick() }
         rule.onNodeWithTag("compat-drawer-tab-context-menu").assertIsDisplayed()
         rule.onNodeWithText("お気に入り").assertIsDisplayed()
@@ -956,6 +958,19 @@ class CompatSettingsSchemaInstrumentedTest {
         rule.onNodeWithText("全て削除する").assertIsDisplayed()
         rule.onNodeWithText("お気に入りを保護する").assertIsDisplayed()
         rule.onNodeWithTag("compat-drawer-protect-favorites", useUnmergedTree = true).assertIsOn()
+
+        rule.onNodeWithText("スレを保護").performClick()
+        rule.onNodeWithText("保護").assertIsDisplayed()
+        activeRow.performTouchInput { swipeRight() }
+        rule.onNodeWithText("お気に入り済みのスレ").assertIsDisplayed()
+        rule.onNodeWithText("お気に入り済みのスレ").performTouchInput { longClick() }
+        rule.onNodeWithTag("compat-drawer-protect-favorites", useUnmergedTree = true).performClick()
+        rule.onNodeWithText("全て削除する").performClick()
+        rule.onNodeWithText("お気に入り済みのスレ").assertIsDisplayed()
+        rule.onNodeWithText("お気に入り済みのスレ").performTouchInput { longClick() }
+        rule.onNodeWithText("スレの保護を解除").performClick()
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("保護").fetchSemanticsNodes().isEmpty() }
+        rule.onNodeWithText("お気に入り済みのスレ").performTouchInput { longClick() }
 
         // reference app apply the checked protection to the single-row
         // delete command too. The former implementation bypassed it here.

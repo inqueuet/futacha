@@ -260,7 +260,21 @@ internal fun rememberFutachaBindingsRuntimeState(
                     fileSystem = fileSystem,
                     sourceRepositories = historyArchiveSourceRepositories,
                     appVersion = observedRuntimeState.appVersion,
-                    clearHistory = clearHistoryEntries
+                    clearHistory = { manifest ->
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                            val removed = stateStore.clearHistoryIf { isHistoryCoveredByArchive(it, manifest) }
+                                ?: return@withContext false
+                            dismissHistoryEntries(
+                                stateStore, effectiveAutoSavedThreadRepository, importedHistoryRepository,
+                                compatibilityStore, removed, removeFromState = false,
+                                onAutoSavedThreadDeleteFailure = {
+                                    Logger.e(FUTACHA_APP_BINDINGS_TAG, "Failed to clear archived threads", it)
+                                }
+                            )
+                            historyRefresher.clearSkippedThreads()
+                            true
+                        }
+                    }
                 )
             },
             onHistoryExportSelected = { selectedEntries ->

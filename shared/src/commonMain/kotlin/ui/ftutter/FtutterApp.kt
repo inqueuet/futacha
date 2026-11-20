@@ -1310,7 +1310,8 @@ internal fun FtutterApp(
                                 openThread(target, FtutterThreadRef(target.id, threadId, title), current.back)
                             },
                             appScope = scope,
-                            onNotice = { notice = it }
+                            onNotice = { notice = it },
+                            onArchiveReportEnabledChanged = onArchiveReportEnabledChanged
                         )
                     }
                 }
@@ -1966,7 +1967,7 @@ private fun FtutterThreadHost(
                 val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
                 stateStore.updateHistory { ftutterHistoryMarkAlive(it, board.id, ref.threadId, now) }
             }
-            // 閲覧スレの外部アーカイブ通知（3モードと同じ共有キー・既定ON）。
+            // 閲覧スレの外部アーカイブ通知（他の3モードと同じ共有キー・既定OFF）。
             launchStore("note the viewed thread") {
                 com.valoser.futacha.shared.ui.futaber.futaberNoteViewedThread(store, currentPreferences, board, ref.threadId, onArchiveReportEnqueued)
             }

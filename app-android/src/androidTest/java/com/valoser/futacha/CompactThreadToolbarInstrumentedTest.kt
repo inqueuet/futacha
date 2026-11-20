@@ -78,21 +78,19 @@ class CompactThreadToolbarInstrumentedTest {
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("compat-thread-post-811", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
     }
 
-    @Test fun defaultsFitAt375393And411DpWithRegularAndLargeTextAndOtherIsImmediatelyUsable() {
+    @Test fun defaultsScrollAt375393And411DpWithFullSizeButtonsAndOtherIsImmediatelyUsable() {
         showThread()
         assertEquals(14, savedItems.count { it.active })
         for (scale in listOf(1f, 1.6f)) for (logicalWidth in listOf(375f, 393f, 411f)) {
             rule.runOnIdle { logicalWidthState.floatValue = logicalWidth; fontScale.floatValue = scale }
             val bar = rule.onNode(threadBar).fetchSemanticsNode().boundsInRoot
-            for (key in savedItems.filter { it.active }.map { it.key } + "other") {
-                val node = rule.onNodeWithTag("compat-toolbar-command-$key").assertIsDisplayed().fetchSemanticsNode()
-                assertTrue("$key is clipped at $logicalWidth dp/$scale", node.boundsInRoot.left >= bar.left - 1 && node.boundsInRoot.right <= bar.right + 1)
-                assertTrue("$key width ${node.size.width}", node.size.width >= 24)
-            }
+            val first = rule.onNodeWithTag("compat-toolbar-command-${savedItems.first { it.active }.key}")
+                .assertIsDisplayed().fetchSemanticsNode()
+            assertTrue("button width ${first.size.width}", first.size.width >= 40)
             val other = rule.onNodeWithTag("compat-toolbar-command-other").fetchSemanticsNode().boundsInRoot
             assertEquals(bar.right, other.right, 1f)
-            assertTrue(other.width in 24f..28f)
-            rule.onNodeWithTag("scrollable-toolbar-more-end").assertDoesNotExist()
+            assertEquals(40f, other.width, 1f)
+            rule.onNodeWithTag("scrollable-toolbar-more-end").assertIsDisplayed()
         }
         openAndCloseOther()
         assertStoredItemsUnchanged()
@@ -112,7 +110,7 @@ class CompactThreadToolbarInstrumentedTest {
         rule.onNodeWithTag("compat-toolbar-command-autoscroll").assertIsDisplayed()
         rule.onNodeWithTag("scrollable-toolbar-more-start").assertIsDisplayed()
         rule.onNodeWithTag("scrollable-toolbar-more-end").assertDoesNotExist()
-        assertTrue(rule.onNodeWithTag("compat-toolbar-command-autoscroll").fetchSemanticsNode().size.width >= 24)
+        assertTrue(rule.onNodeWithTag("compat-toolbar-command-autoscroll").fetchSemanticsNode().size.width >= 40)
         openAndCloseOther()
         assertStoredItemsUnchanged()
     }

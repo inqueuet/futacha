@@ -118,6 +118,8 @@ internal fun CompatCatalogCacheSearchDialog(
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
+    var searchFailure by remember { mutableStateOf<String?>(null) }
+
     fun applyMode(nextMode: CompatCatalogCacheSearchMode) {
         mode = nextMode
         val base = baseResults
@@ -128,24 +130,36 @@ internal fun CompatCatalogCacheSearchDialog(
             results = withContext(AppDispatchers.parsing) {
                 filterLegacyCompatCatalogCacheByTermMatches(base, terms, nextMode, matches)
             }
+            error = searchFailure
         }
     }
 
     fun runSearch(keyword: String = query) {
+        if (loading) return
         val normalized = cleanCompatCacheSearchKeyword(keyword)
         if (normalized.isBlank()) {
             error = "検索語を入力してください"
             return
         }
         loading = true
+        modeFilterJob?.cancel()
         error = null
+        searchFailure = null
         scope.launch {
             try {
                 val terms = compatCacheSearchTerms(normalized)
                 val localMatches = loadCompatCacheSearchBodyTermMatches(store, localHistory, boardKey, terms)
+                val remoteMatches = mutableMapOf<String, MutableSet<Int>>()
+                var remoteFailure: Throwable? = null
                 val remoteResult = httpClient?.let {
-                    searchCompatCatalogCacheRemote(it, boardUrl, normalized)
+                    searchCompatCatalogCacheRemote(it, boardUrl, normalized, onRemoteTermMatch = { id, term ->
+                        terms.forEachIndexed { index, candidate ->
+                            if (candidate.raw == term) remoteMatches.getOrPut(id) { mutableSetOf() }.add(index)
+                        }
+                    }, onRemoteFailure = { remoteFailure = it })
                 }
+                val allMatches = localMatches.toMutableMap()
+                remoteMatches.forEach { (id, indices) -> allMatches[id] = allMatches[id].orEmpty() + indices }
                 val fetched = remoteResult?.getOrDefault(emptyList()).orEmpty()
                 val searchMode = mode
                 val (merged, filtered) = withContext(AppDispatchers.parsing) {
@@ -154,38 +168,42 @@ internal fun CompatCatalogCacheSearchDialog(
                         localHistory = localHistory,
                         boardKey = boardKey,
                         terms = terms,
-                        bodyTermMatches = localMatches
+                        bodyTermMatches = allMatches
                     )
                     mergedResults to filterLegacyCompatCatalogCacheByTermMatches(
                         mergedResults,
                         terms,
                         searchMode,
-                        localMatches
+                        allMatches
                     )
                 }
                 modeFilterJob?.cancel()
-                bodyTermMatches = localMatches
+                bodyTermMatches = allMatches
                 searchedTerms = terms
                 baseResults = merged
                 results = if (mode == searchMode) {
                     filtered
                 } else {
                     withContext(AppDispatchers.parsing) {
-                        filterLegacyCompatCatalogCacheByTermMatches(merged, terms, mode, localMatches)
+                        filterLegacyCompatCatalogCacheByTermMatches(merged, terms, mode, allMatches)
                     }
                 }
                 searchedQuery = normalized
                 searchHistory = rememberCompatCacheSearchKeyword(searchHistory, normalized)
                 onSearchHistoryChanged(searchHistory)
-                if (results.isEmpty()) {
-                    error = remoteResult?.exceptionOrNull()?.message
-                        ?: if (httpClient == null) "通信機能を初期化できませんでした" else null
+                searchFailure = when {
+                    remoteFailure != null -> "一部の検索に失敗しました。結果をすべて確認できませんでした"
+                    remoteResult?.isFailure == true -> remoteResult.exceptionOrNull()?.message ?: "過去スレ検索に失敗しました"
+                    httpClient == null -> "通信機能を初期化できませんでした"
+                    else -> null
                 }
+                error = searchFailure
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Throwable) {
                 results = emptyList()
-                error = failure.message ?: "キャッシュ検索に失敗しました"
+                searchFailure = failure.message ?: "過去スレ検索に失敗しました"
+                error = searchFailure
             } finally {
                 loading = false
             }
@@ -194,7 +212,7 @@ internal fun CompatCatalogCacheSearchDialog(
 
     FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("キャッシュ検索") },
+        title = { Text("過去スレ検索") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -247,11 +265,13 @@ internal fun CompatCatalogCacheSearchDialog(
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     RadioButton(
+                        enabled = !loading,
                         selected = mode == CompatCatalogCacheSearchMode.OR,
                         onClick = { applyMode(CompatCatalogCacheSearchMode.OR) }
                     )
                     Text(compatCatalogCacheSearchModeLabel(CompatCatalogCacheSearchMode.OR))
                     RadioButton(
+                        enabled = !loading,
                         selected = mode == CompatCatalogCacheSearchMode.AND,
                         onClick = { applyMode(CompatCatalogCacheSearchMode.AND) }
                     )
@@ -262,7 +282,7 @@ internal fun CompatCatalogCacheSearchDialog(
                 }
                 error?.let { Text(it) }
                 if (!loading && error == null && searchedQuery.isNotBlank() && results.isEmpty()) {
-                    Text("該当するキャッシュはありません")
+                    Text("一致する過去スレが見つかりません")
                 }
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp)
@@ -435,8 +455,6 @@ internal fun filterLegacyCompatCatalogCacheByTermMatches(
     }
 }
 
-private const val COMPAT_CACHE_SEARCH_ARCHIVE_MAX_TERMS = 4
-
 /** The whole cache search (every archive term and the old server) ends within this time. */
 internal const val COMPAT_CACHE_SEARCH_TOTAL_TIMEOUT_MILLIS = 60_000L
 
@@ -446,7 +464,7 @@ private val compatCacheSearchArchiveJson = Json { ignoreUnknownKeys = true }
 /**
  * The cache search's remote results. The reference app's own server (futabaapp.xsrv.jp) answered 403
  * for the whole site when checked on 2026-11-08, so the archive search the thread menu uses (inqueuet, then ふたポ
- * and ふたばフォレスト) comes first, one search per term (at most four) so OR and AND are filtered
+ * and ふたばフォレスト) comes first, one search per term within the shared deadline so OR and AND are filtered
  * locally as before. The old server is still tried last and quietly, in case it comes back; its
  * failure is never what the screen shows.
  */
@@ -454,13 +472,13 @@ internal suspend fun searchCompatCatalogCacheRemote(
     httpClient: HttpClient,
     boardUrl: String,
     query: String,
-    searchArchive: suspend (String, ArchiveSearchScope) -> List<ArchiveSearchItem> = { term, scope ->
-        searchInqueuetArchiveThreads(httpClient, compatCacheSearchArchiveJson, term, scope)
-    },
+    searchArchive: (suspend (String, ArchiveSearchScope) -> List<ArchiveSearchItem>)? = null,
     searchLegacy: suspend () -> Result<List<CatalogItem>> = {
         searchLegacyCompatCatalogCache(httpClient, boardUrl, query)
     },
-    totalTimeoutMillis: Long = COMPAT_CACHE_SEARCH_TOTAL_TIMEOUT_MILLIS
+    totalTimeoutMillis: Long = COMPAT_CACHE_SEARCH_TOTAL_TIMEOUT_MILLIS,
+    onRemoteTermMatch: (String, String) -> Unit = { _, _ -> },
+    onRemoteFailure: (Throwable) -> Unit = {}
 ): Result<List<CatalogItem>> {
     // The Futaba cache and archive services never see an あいもげ board (AM-B4): its scope sends each term to
     // あいもげ's own archive (`/archive/{slug}?q=`), and the legacy cache server is not asked.
@@ -470,12 +488,26 @@ internal suspend fun searchCompatCatalogCacheRemote(
     val scope = (if (aimoge) com.valoser.futacha.shared.network.extractPastSearchScope(boardUrl) else extractArchiveSearchScope(boardUrl))
         ?: if (aimoge) return Result.success(emptyList()) else return withTimeoutOrNull(totalTimeoutMillis) { searchLegacy() }
             ?: Result.failure(CompatCacheSearchTimeoutException())
-    val terms = compatCacheSearchTerms(query).map(CompatCacheSearchTerm::raw).distinct()
-        .take(COMPAT_CACHE_SEARCH_ARCHIVE_MAX_TERMS)
+    suspend fun fetch(term: String): List<ArchiveSearchItem> = searchArchive?.invoke(term, scope)
+        ?: searchInqueuetArchiveThreads(httpClient, compatCacheSearchArchiveJson, term, scope,
+            onSourceFailure = { onRemoteFailure(IllegalStateException(it)) })
+
+    val allTerms = compatCacheSearchTerms(query).map(CompatCacheSearchTerm::raw).distinct()
         .ifEmpty { listOf(query.trim()) }
+    if (aimoge) {
+        val matches = searchCompatAimogeTerms(allTerms, totalTimeoutMillis) { fetch(it) }
+        if (matches.rows.isEmpty()) matches.failure?.let { return Result.failure(it) }
+        matches.failure?.let(onRemoteFailure)
+        return Result.success(matches.rows.mapNotNull { item ->
+            val url = buildCompatArchiveSourceThreadUrl(item) ?: return@mapNotNull null
+            matches.termsByThread[item.threadId].orEmpty().forEach { onRemoteTermMatch(item.threadId, it) }
+            CatalogItem(id = item.threadId, threadUrl = url, title = item.title, thumbnailUrl = item.thumbUrl,
+                fullImageUrl = item.thumbUrl, replyCount = item.replyCount)
+        })
+    }
     var archiveFailure: Throwable? = null
     val archived = ArrayList<CatalogItem>()
-    for (term in terms) {
+    for (term in allTerms) {
         // The whole search shares one time limit: a slow archive ends the remaining terms.
         val left = remaining()
         if (left <= 0) {
@@ -483,11 +515,12 @@ internal suspend fun searchCompatCatalogCacheRemote(
             break
         }
         val found = withTimeoutOrNull(left) {
-            runSuspendCatchingPreservingCancellation { searchArchive(term, scope) }
+            runSuspendCatchingPreservingCancellation { fetch(term) }
         } ?: Result.failure(CompatCacheSearchTimeoutException())
         found.exceptionOrNull()?.let { if (archiveFailure == null) archiveFailure = it }
         found.getOrNull().orEmpty().forEach { item ->
             val url = buildCompatArchiveSourceThreadUrl(item) ?: return@forEach
+            onRemoteTermMatch(item.threadId, term)
             archived += CatalogItem(
                 id = item.threadId,
                 threadUrl = url,
@@ -498,8 +531,11 @@ internal suspend fun searchCompatCatalogCacheRemote(
             )
         }
     }
-    if (archived.isNotEmpty()) return Result.success(archived.distinctBy(CatalogItem::threadUrl))
-    val legacy = remaining().takeIf { it > 0 && !aimoge }
+    if (archived.isNotEmpty()) {
+        archiveFailure?.let(onRemoteFailure)
+        return Result.success(archived.distinctBy(CatalogItem::threadUrl))
+    }
+    val legacy = remaining().takeIf { it > 0 }
         ?.let { left -> withTimeoutOrNull(left) { searchLegacy() } }
         ?.getOrNull().orEmpty()
     if (legacy.isNotEmpty()) return Result.success(legacy)
@@ -556,7 +592,7 @@ internal suspend fun searchLegacyCompatCatalogCache(
                 )
             }.distinctBy(CatalogItem::threadUrl)
         }
-    } ?: error("キャッシュ検索がタイムアウトしました")
+    } ?: error("過去スレ検索がタイムアウトしました")
 }
 
 internal fun filterLegacyCompatCatalogCache(

@@ -1,9 +1,11 @@
 package com.valoser.futacha.shared.ui.image
 
 import coil3.disk.DiskCache
-import com.valoser.futacha.shared.util.Logger
-import kotlin.concurrent.atomics.AtomicReference
-import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okio.Path
 
 /**
@@ -15,70 +17,61 @@ import okio.Path
  * miss each other's entries and can corrupt the journal. Loaders now lease the shared
  * instance and the last lease closes it.
  */
-@OptIn(ExperimentalAtomicApi::class)
 internal class SharedImageDiskCacheRegistry(
     private val create: (directory: Path, maxBytes: Long) -> DiskCache? = { directory, maxBytes ->
         DiskCache.Builder().directory(directory).maxSizeBytes(maxBytes).build()
     }
 ) {
-    private class Entry(val cache: DiskCache, val holders: Int)
+    private class Entry(val cache: DiskCache) {
+        var holders = 1
+        val closed = CompletableDeferred<Unit>()
+    }
 
-    private val entries = AtomicReference<Map<String, Entry>>(emptyMap())
+    private val lock = Mutex()
+    private val entries = mutableMapOf<String, Entry>()
 
-    fun acquire(directory: Path, maxBytes: Long): DiskCache? {
+    suspend fun acquire(directory: Path, maxBytes: Long): DiskCache? {
         val key = directory.normalized().toString()
-        var created: DiskCache? = null
         while (true) {
-            val current = entries.load()
-            val existing = current[key]
-            if (existing != null) {
-                if (entries.compareAndSet(current, current + (key to Entry(existing.cache, existing.holders + 1)))) {
-                    created?.shutdown()
-                    if (existing.cache.maxSize != maxBytes) {
-                        Logger.i(
-                            TAG,
-                            "Image disk cache in use; its size changes to $maxBytes bytes once every loader is released"
-                        )
-                    }
+            val closing = lock.withLock {
+                val existing = entries[key]
+                if (existing == null) {
+                    // Coil opens the journal lazily on first use.
+                    return create(directory, maxBytes)?.also { entries[key] = Entry(it) }
+                }
+                if (existing.holders > 0 && existing.cache.maxSize == maxBytes) {
+                    existing.holders++
                     return existing.cache
                 }
-                continue
+                existing.closed
             }
-            val candidate = created ?: create(directory, maxBytes)?.also { created = it } ?: return null
-            if (entries.compareAndSet(current, current + (key to Entry(candidate, 1)))) {
-                return candidate
+            closing.await()
+        }
+    }
+
+    suspend fun release(cache: DiskCache) = withContext(NonCancellable) {
+        val closing = lock.withLock {
+            val match = entries.entries.firstOrNull { it.value.cache === cache }
+            if (match != null) {
+                if (match.value.holders == 0 || --match.value.holders > 0) return@withContext
+                match.key to match.value
+            } else null
+        }
+        try {
+            cache.shutdown()
+        } finally {
+            if (closing != null) {
+                val (key, entry) = closing
+                lock.withLock {
+                    entries.remove(key)
+                    entry.closed.complete(Unit)
+                }
             }
         }
     }
 
-    /** Releases one lease; the last one closes the cache. Unknown caches are closed directly. */
-    fun release(cache: DiskCache) {
-        while (true) {
-            val current = entries.load()
-            val match = current.entries.firstOrNull { it.value.cache === cache }
-            if (match == null) {
-                cache.shutdown()
-                return
-            }
-            val remaining = match.value.holders - 1
-            val next = if (remaining <= 0) {
-                current - match.key
-            } else {
-                current + (match.key to Entry(cache, remaining))
-            }
-            if (entries.compareAndSet(current, next)) {
-                if (remaining <= 0) cache.shutdown()
-                return
-            }
-        }
-    }
-
-    internal fun holderCount(directory: Path): Int =
-        entries.load()[directory.normalized().toString()]?.holders ?: 0
-
-    private companion object {
-        const val TAG = "SharedImageDiskCache"
-    }
+    internal suspend fun holderCount(directory: Path): Int =
+        lock.withLock { entries[directory.normalized().toString()]?.holders ?: 0 }
 }
 
 internal val SharedImageDiskCaches = SharedImageDiskCacheRegistry()

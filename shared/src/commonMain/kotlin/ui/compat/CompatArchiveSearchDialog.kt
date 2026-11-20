@@ -61,7 +61,8 @@ internal fun serializeCompatArchiveSearchHistory(values: List<String>): String =
 internal fun filterCompatArchiveSearchItems(
     items: List<ArchiveSearchItem>,
     query: String,
-    mode: String
+    mode: String,
+    remoteTermsByThread: Map<String, Set<String>> = emptyMap()
 ): List<ArchiveSearchItem> {
     val terms = query.trim().split(compatArchiveWhitespaceRegex).filter { it.isNotBlank() }
     if (terms.isEmpty()) return items
@@ -70,8 +71,10 @@ internal fun filterCompatArchiveSearchItems(
             item.threadId.contains(term, ignoreCase = true)
     }
     return items.filter { item ->
-        if (mode == CompatArchiveSearchMode.AND.name) terms.all { matches(item, it) }
-        else terms.any { matches(item, it) }
+        val remoteTerms = remoteTermsByThread[item.threadId].orEmpty()
+        fun matchesTerm(term: String): Boolean = term in remoteTerms || matches(item, term)
+        if (mode == CompatArchiveSearchMode.AND.name) terms.all(::matchesTerm)
+        else terms.any(::matchesTerm)
     }
 }
 
@@ -81,7 +84,7 @@ internal fun mergeCompatArchiveSearchItems(
     scope: ArchiveSearchScope?
 ): List<ArchiveSearchItem> {
     val local = localHistory.mapNotNull { entry ->
-        val entryScope = extractArchiveSearchScope(entry.originalUrl) ?: return@mapNotNull null
+        val entryScope = com.valoser.futacha.shared.network.extractPastSearchScope(entry.originalUrl) ?: return@mapNotNull null
         if (scope != null && entryScope != scope) return@mapNotNull null
         ArchiveSearchItem(
             threadId = entry.threadNo,
@@ -142,9 +145,14 @@ internal fun CompatArchiveSearchDialog(
     var noticeVisible by remember { mutableStateOf(!noticeHidden) }
     var hideNoticeNextTime by rememberSaveable { mutableStateOf(false) }
 
-    val results = filterCompatArchiveSearchItems(fetchedResults, query, mode.name)
+    var searchedQuery by remember { mutableStateOf("") }
+    val visibleSource = if (archiveScope?.aimogeSlug == null || query.trim() == searchedQuery) fetchedResults
+        else fetchedResults.filter { it.status == "端末履歴" }
+    var remoteTermsByThread by remember { mutableStateOf<Map<String, Set<String>>>(emptyMap()) }
+    val results = filterCompatArchiveSearchItems(visibleSource, query, mode.name, remoteTermsByThread.takeIf { query.trim() == searchedQuery }.orEmpty())
 
     fun search(includeAllSources: Boolean = false) {
+        if (loading) return
         val normalized = query.trim()
         if (normalized.isBlank()) {
             error = "検索語を入力してください"
@@ -161,7 +169,14 @@ internal fun CompatArchiveSearchDialog(
         sourceFailures = emptyList()
         coroutineScope.launch {
             try {
-                val fetched = if (client == null) emptyList() else searchInqueuetArchiveThreads(
+                val aimogeMatches = if (client != null && archiveScope?.aimogeSlug != null) {
+                    val terms = normalized.split(compatArchiveWhitespaceRegex).filter(String::isNotBlank).distinct()
+                    searchCompatAimogeTerms(terms) { term ->
+                        searchInqueuetArchiveThreads(client, archiveSearchJson, term, archiveScope,
+                            onSourceFailure = { failure -> sourceFailures = (sourceFailures + failure).distinct() })
+                    }
+                } else null
+                val fetched = aimogeMatches?.rows ?: if (client == null) emptyList() else searchInqueuetArchiveThreads(
                     httpClient = client,
                     archiveSearchJson = archiveSearchJson,
                     query = normalized,
@@ -171,20 +186,23 @@ internal fun CompatArchiveSearchDialog(
                     onSourceFailure = { failure -> sourceFailures = (sourceFailures + failure).distinct() }
                 )
                 val merged = mergeCompatArchiveSearchItems(fetched, localHistory, archiveScope)
+                if (aimogeMatches?.failure != null) {
+                    sourceFailures += "一部の検索に失敗しました。結果をすべて確認できませんでした"
+                }
+                searchedQuery = normalized
+                remoteTermsByThread = aimogeMatches?.termsByThread.orEmpty()
                 fetchedResults = merged
                 searchHistory = listOf(normalized) + searchHistory.filterNot { it.equals(normalized, true) }.take(19)
                 onSearchHistoryChanged(searchHistory)
-                if (filterCompatArchiveSearchItems(merged, normalized, mode.name).isEmpty()) {
-                    error = if (sourceFailures.isEmpty()) "一致する過去スレが見つかりません"
-                        else "一部の検索先に接続できず、検索を完了できませんでした"
-                }
             } catch (cancellation: CancellationException) {
                 // A timeout inside the search is reported like any failure.
                 val timeout = cancellation.compatTimeoutFailureOrThrow("過去ログ検索がタイムアウトしました")
                 error = timeout.message
+                remoteTermsByThread = emptyMap()
                 fetchedResults = mergeCompatArchiveSearchItems(emptyList(), localHistory, archiveScope)
             } catch (failure: Throwable) {
                 error = failure.message ?: "過去ログ検索に失敗しました"
+                remoteTermsByThread = emptyMap()
                 fetchedResults = mergeCompatArchiveSearchItems(emptyList(), localHistory, archiveScope)
             } finally {
                 loading = false
@@ -233,7 +251,7 @@ internal fun CompatArchiveSearchDialog(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                TextButton(enabled = !loading && query.isNotBlank(), onClick = { search(true) }) { Text("他の保存先も検索") }
+                if (archiveScope?.aimogeSlug == null) TextButton(enabled = !loading && query.isNotBlank(), onClick = { search(true) }) { Text("他の保存先も検索") }
                 TextField(
                     value = query,
                     onValueChange = { query = it.take(200); error = null },
@@ -308,6 +326,7 @@ internal fun CompatArchiveSearchDialog(
                     Text(sourceFailures.joinToString("\n"), color = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.testTag("archive-search-source-failures"))
                 }
+                if (!loading) error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 when {
                     loading -> Row(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
@@ -317,7 +336,6 @@ internal fun CompatArchiveSearchDialog(
                         CircularProgressIndicator(modifier = Modifier.padding(2.dp))
                         Text("検索中…")
                     }
-                    error != null -> Text(error!!, color = MaterialTheme.colorScheme.error)
                     results.isNotEmpty() -> LazyColumn(
                         modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -337,6 +355,8 @@ internal fun CompatArchiveSearchDialog(
                             }
                         }
                     }
+                    error == null && sourceFailures.isEmpty() && searchedQuery.isNotEmpty() &&
+                        query.trim() == searchedQuery -> Text("一致する過去スレが見つかりません")
                 }
             }
         },

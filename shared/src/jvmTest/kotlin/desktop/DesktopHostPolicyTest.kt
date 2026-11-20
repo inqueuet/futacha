@@ -10,7 +10,7 @@ class DesktopHostPolicyTest {
         assertFalse(desktopWindowInForeground(showing = false, minimized = false, appHidden = false))
     }
 
-    @Test fun wiredWifiAndUnknownConnectionsAreUnmeteredButTetheringIsNot() {
+    @Test fun wiredAndWifiPortsAreRecognizedAndUnprobedConnectionsStayRestricted() {
         val route = """
                route to: default
             destination: default
@@ -46,8 +46,7 @@ class DesktopHostPolicyTest {
         assertFalse(isMeteredDesktopHardwarePort(null))
         assertTrue(isMeteredDesktopHardwarePort("iPhone USB"))
         assertTrue(isMeteredDesktopHardwarePort("Bluetooth PAN"))
-        // Before the first probe the state must not block Wi-Fi-only work.
-        assertTrue(DesktopNetworkState.unmetered)
+        assertFalse(DesktopNetworkState.unmetered, "An unprobed connection must not start unmetered-only work")
     }
 
     @Test fun trayBalloonOpensItsThreadOnceAndNotOnLaterIconClicks() {

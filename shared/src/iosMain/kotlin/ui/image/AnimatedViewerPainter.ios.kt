@@ -44,7 +44,7 @@ internal actual fun platformAnimatedViewerPainter(state: AsyncImagePainter.State
         if (!animate || !foreground) return@LaunchedEffect
         try {
             // Foreground changes cancel this job; delays preserve timing without a busy redraw loop.
-            withContext(AppDispatchers.io) {
+            val finished = withContext(AppDispatchers.io) {
                 Data.makeFromBytes(image.bytes).useGifNative { data ->
                     Codec.makeFromData(data).useGifNative { codec ->
                         Bitmap().useGifNative { bitmap ->
@@ -61,7 +61,7 @@ internal actual fun platformAnimatedViewerPainter(state: AsyncImagePainter.State
                                 delay(codec.getFrameInfo(index).duration.coerceAtLeast(20).toLong())
                                 index++
                                 if (index == codec.frameCount) {
-                                    if (loops == 0) awaitCancellation()
+                                    if (loops == 0) return@withContext true
                                     if (loops > 0) loops--
                                     index = 0
                                 }
@@ -69,7 +69,9 @@ internal actual fun platformAnimatedViewerPainter(state: AsyncImagePainter.State
                         }
                     }
                 }
+                false
             }
+            if (finished) awaitCancellation()
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { com.valoser.futacha.shared.util.Logger.w("IosGif", "Animation stopped: ${failure.message}") }
         finally { painter.replace(null) }

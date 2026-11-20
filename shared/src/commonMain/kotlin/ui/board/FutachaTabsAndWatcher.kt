@@ -3,6 +3,10 @@ package com.valoser.futacha.shared.ui.board
 import androidx.compose.runtime.remember
 import com.valoser.futacha.shared.compat.shownSiteTabs
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -77,7 +81,15 @@ internal fun FutachaTabsDialog(
             LazyColumn(Modifier.heightIn(max = 400.dp)) {
                 items(tabs, key = { it.key }) { tab ->
                     ListItem(
-                        headlineContent = { Text(tab.title) },
+                        headlineContent = { Row(verticalAlignment = Alignment.CenterVertically) {
+                            // may 1448795734: like としあき(仮)'s tab list, a fallen tab carries a 落ち mark.
+                            val badge = threadStatusBadgeText(tab.confirmedStatus())
+                            if (badge.isNotEmpty()) Text(badge, color = Color.White, fontSize = 12.sp,
+                                modifier = Modifier.padding(end = 6.dp).background(Color.Black.copy(alpha = 0.85f))
+                                    .padding(horizontal = 4.dp).testTag("futacha-tab-status-${tab.key}"))
+                            // Grey whenever a mark is shown (落ち・隔離・削除), the same rule as the mark.
+                            Text(tab.title, color = if (badge.isNotEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else Color.Unspecified)
+                        } },
                         supportingContent = { Column {
                             val status = threadStatusText(tab.confirmedStatus())
                             Text("${tab.boardName}・${tab.replyCount}レス${if (status.isEmpty()) "" else "・$status"}")

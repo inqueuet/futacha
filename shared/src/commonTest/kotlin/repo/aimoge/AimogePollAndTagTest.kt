@@ -8,6 +8,7 @@ import com.valoser.futacha.shared.network.aimoge.AimogeThreadDto
 import com.valoser.futacha.shared.network.aimoge.toCatalogItem
 import com.valoser.futacha.shared.network.aimoge.toPost
 import com.valoser.futacha.shared.network.aimoge.aimogePollHtml
+import com.valoser.futacha.shared.network.aimoge.aimogePollOptionLinks
 import com.valoser.futacha.shared.network.aimoge.AimogePollState
 import com.valoser.futacha.shared.network.aimoge.AimogePollStateDto
 import com.valoser.futacha.shared.network.aimoge.aimogeMergePollState
@@ -21,7 +22,10 @@ class AimogePollAndTagTest {
     @Test fun aPollShowsItsOptionsUnderTheBodyWithNoVotes() {
         val post = AimogePostDto(id = "u", body = "どれ？",
             poll = AimogePollDto(options = listOf(AimogePollOptionDto("a", "犬<猫"), AimogePollOptionDto("b", "鳥"))))
-        assertEquals("どれ？\n\nアンケート\n・犬<猫\n・鳥\n（選択肢を押すと回答できます）", messageHtmlToPlainText(post.toPost(0).messageHtml))
+        val html = post.toPost(0).messageHtml
+        val text = messageHtmlToPlainText(html)
+        assertEquals("どれ？\n\nアンケート\n\n・犬<猫\n\n・鳥\n（選択肢を押すと回答できます）", text)
+        assertEquals(listOf("犬<猫", "鳥"), aimogePollOptionLinks(html, text).map { (range, _) -> text.substring(range) })
         assertEquals("x", messageHtmlToPlainText(AimogePostDto(id = "v", body = "x").toPost(0).messageHtml))
     }
 

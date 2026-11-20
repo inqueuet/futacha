@@ -1324,7 +1324,8 @@ private suspend fun choosePhotoProviders(maxCount: Int): List<platform.Foundatio
         }
         val config = PHPickerConfiguration().apply {
             selectionLimit = maxCount.coerceAtLeast(1).toLong()
-            filter = PHPickerFilter.imagesFilter
+            // Videos too (aimg seq39): あいもげ takes them, あぷ小 takes small ones.
+            filter = PHPickerFilter.anyFilterMatchingSubfilters(listOf(PHPickerFilter.imagesFilter, PHPickerFilter.videosFilter))
         }
         val picker = PHPickerViewController(configuration = config)
         val delegate = object : NSObject(), PHPickerViewControllerDelegateProtocol, UIAdaptivePresentationControllerDelegateProtocol {
@@ -1358,22 +1359,26 @@ private suspend fun loadPhotoProvider(itemProvider: platform.Foundation.NSItemPr
             timeout = null
             continuation.resume(value)
         }
-        val requestedType = itemProvider.registeredTypeIdentifiers.filterIsInstance<String>()
-            .firstOrNull { UTType.typeWithIdentifier(it)?.conformsToType(UTTypeImage) == true } ?: "public.image"
+        val types = itemProvider.registeredTypeIdentifiers.filterIsInstance<String>()
+        val imageType = types.firstOrNull { UTType.typeWithIdentifier(it)?.conformsToType(UTTypeImage) == true }
+        val videoType = if (imageType == null) types.firstOrNull { UTType.typeWithIdentifier(it)?.conformsToType(UTTypeMovie) == true } else null
+        val isVideo = videoType != null
+        val requestedType = imageType ?: videoType ?: "public.image"
+        val fallbackName = if (isVideo) DEFAULT_PICKED_VIDEO_FILE_NAME else DEFAULT_PICKED_IMAGE_FILE_NAME
         val dataFileName = UTType.typeWithIdentifier(requestedType)?.preferredFilenameExtension
-            ?.let { "image.$it" } ?: DEFAULT_PICKED_IMAGE_FILE_NAME
+            ?.let { (if (isVideo) "video." else "image.") + it } ?: fallbackName
         dispatch_async(dispatch_get_main_queue()) {
             timeout = schedulePickedMediaLoadTimeout(logLabel = "image", complete = { complete(null) })
         }
         continuation.invokeOnCancellation { dispatch_async(dispatch_get_main_queue()) { timeout?.cancel() } }
         itemProvider.loadFileRepresentationForTypeIdentifier(requestedType) { url, _ ->
             if (url != null) {
-                val selected = loadPickedMediaFromUrl(url = url, isVideo = false, fallbackFileName = DEFAULT_PICKED_IMAGE_FILE_NAME, maxBytes = maxBytes)
+                val selected = loadPickedMediaFromUrl(url = url, isVideo = isVideo, fallbackFileName = fallbackName, maxBytes = maxBytes)
                 dispatch_async(dispatch_get_main_queue()) { complete(selected) }
                 return@loadFileRepresentationForTypeIdentifier
             }
             itemProvider.loadDataRepresentationForTypeIdentifier(requestedType) { data, _ ->
-                val selected = data?.let { copyPickedProviderData(it, "image", dataFileName, maxBytes) }
+                val selected = data?.let { copyPickedProviderData(it, if (isVideo) "video" else "image", dataFileName, maxBytes) }
                 dispatch_async(dispatch_get_main_queue()) {
                     releasePickedProviderData()
                     complete(selected)

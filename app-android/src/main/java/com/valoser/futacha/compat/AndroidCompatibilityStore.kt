@@ -1589,8 +1589,10 @@ class AndroidCompatibilityStore(
                 db.replaceAllTabViews(merged.mapTo(mutableSetOf()) { it.profile }, merged)
             }
             val restoredHistoryUrls = if (restoreUserSettings) {
-                db.deleteHistoryTombstone(com.valoser.futacha.shared.compat.COMPAT_HISTORY_CLEARED_MARKER)
                 backup.history.filter { it.boardKey in validBoardKeys }.also { entries ->
+                    if (entries.isNotEmpty()) {
+                        db.deleteHistoryTombstone(com.valoser.futacha.shared.compat.COMPAT_HISTORY_CLEARED_MARKER)
+                    }
                     entries.forEach { entry ->
                         db.deleteHistoryTombstone(entry.canonicalUrl)
                         db.upsertHistory(entry)

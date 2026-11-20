@@ -1031,6 +1031,7 @@ internal fun String.compatSettingsEntries(): List<CompatSettingEntry> = when (th
         CompatSettingEntry("スレッドのタイトルの文字サイズ", "標準", preferenceKey = "threadTitleFontSize"),
         CompatSettingEntry("レス間の余白", "標準", preferenceKey = "threadPostSpacing"),
         CompatSettingEntry("レスを押した時に色を付ける", "ON", preferenceKey = COMPAT_THREAD_PRESS_HIGHLIGHT_KEY),
+        CompatSettingEntry("自分の書き込みに左の線を引く", "OFF", preferenceKey = COMPAT_THREAD_OWN_POST_LINE_KEY),
         CompatSettingEntry("サムネイルサイズ", "250dp", preferenceKey = "threadThumbSize"),
         CompatSettingEntry("あぷ小のサムネイルサイズ", "250dp", preferenceKey = "threadUpsThumbSize"),
         CompatSettingEntry(
@@ -1136,7 +1137,7 @@ internal fun compatSettingsGroups(path: String, modernPresentation: Boolean = fa
             ),
             "画面表示" to entries.compatKeys(
                 COMPAT_THREAD_DISPLAY_MODE_KEY, "threadHideDefaultNameAndSubject", "threadHeaderQuoteSimple", "threadHeaderSoudaneDisplay",
-                "threadAdminDeleteShow", "commonPrivacyAlpha", COMPAT_PRIVACY_BLUR_KEY, "threadFontSize", "threadHeaderFontSize", "threadTitleFontSize", "threadPostSpacing", COMPAT_THREAD_PRESS_HIGHLIGHT_KEY, "threadThumbSize",
+                "threadAdminDeleteShow", "commonPrivacyAlpha", COMPAT_PRIVACY_BLUR_KEY, "threadFontSize", "threadHeaderFontSize", "threadTitleFontSize", "threadPostSpacing", COMPAT_THREAD_PRESS_HIGHLIGHT_KEY, COMPAT_THREAD_OWN_POST_LINE_KEY, "threadThumbSize",
                 "threadUpsThumbSize", "threadUpsThumbMethod", COMPAT_THREAD_CONTEXT_MENU_SCALE_KEY
             ),
             "抽出する閾値" to entries.compatKeys("threadExtractSoudaneNum", "threadExtractQuoteNum")

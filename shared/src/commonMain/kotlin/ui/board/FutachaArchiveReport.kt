@@ -31,11 +31,11 @@ import kotlinx.coroutines.launch
  * the thread's address goes out; the body, the pictures, any user or device id do not. The outbox itself decides which
  * boards take part ([com.valoser.futacha.shared.compat.normalizeArchiveReportThreadUrl]).
  *
- * The one switch is the shared key [ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY]: nothing stored (or anything but "OFF") is on,
+ * The one switch is the shared key [ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY]: only an explicit "ON" enables it,
  * the same in every mode. The desktop app has no sender, so nothing is noted there (it would only pile up).
  */
 internal fun viewedThreadArchiveReportDue(enabledPreference: String?, liveFetch: Boolean, desktop: Boolean): Boolean =
-    enabledPreference != "OFF" && liveFetch && !desktop
+    enabledPreference == "ON" && liveFetch && !desktop
 
 /**
  * Whether the page ふたちゃ accepted was read from the board just now: not the device's copy shown while it loads
@@ -110,7 +110,7 @@ internal suspend fun FutachaSharedFeatures.noteViewedThreadForArchive(
 internal const val VIEWED_THREAD_ARCHIVE_REPORT_LABEL = "閲覧したスレのURLを過去ログ保存サービスへ通知"
 internal const val VIEWED_THREAD_ARCHIVE_REPORT_DESCRIPTION =
     "取得に成功して表示した対応板のスレURLだけを通知します。本文・画像・利用者ID・端末IDは送信しません。" +
-        "ふたちゃ・としあき(仮)・ふたばー風で共通の設定です。"
+        "初期値はOFFです。Android・iOSの4モードで共通の設定です。"
 
 /**
  * The switch at the end of ふたちゃ's "バックグラウンド・通信" settings (nothing on the desktop, which sends nothing). It
@@ -142,7 +142,7 @@ internal fun FutachaArchiveReportSettingRow() {
     var saving by remember { mutableStateOf(false) }
     var problem by remember { mutableStateOf<String?>(null) }
     val readFailed = stored.second.isFailure
-    val enabled = stored.second.getOrNull() != "OFF" && !readFailed
+    val enabled = stored.second.getOrNull() == "ON" && !readFailed
     HorizontalDivider()
     ListItem(
         headlineContent = { Text(VIEWED_THREAD_ARCHIVE_REPORT_LABEL) },

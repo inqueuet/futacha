@@ -61,10 +61,6 @@ class FtutterPostSheetInstrumentedTest {
         val width = rule.activity.resources.displayMetrics.widthPixels.toFloat()
         val sheet = rule.onNodeWithTag("ftutter-post-dialog").fetchSemanticsNode().boundsInWindow
         assertEquals(width, sheet.width, 2f)
-        val title = rule.onNodeWithTag("ftutter-post-title").fetchSemanticsNode().boundsInWindow
-        val name = rule.onNodeWithTag("ftutter-post-name").fetchSemanticsNode().boundsInWindow
-        assertEquals("題名とおなまえは横並び", title.top, name.top, 2f)
-        assertTrue(name.left > title.right - 1f)
         // 開くと本文に入力が向く（原作はすぐキーボード）。
         rule.waitUntil(5_000) {
             rule.onNodeWithTag("ftutter-post-comment").fetchSemanticsNode().config.getOrElse(SemanticsProperties.Focused) { false }
@@ -74,8 +70,23 @@ class FtutterPostSheetInstrumentedTest {
         rule.onNodeWithTag("ftutter-post-send").assertExists()
         rule.onAllNodesWithText("閉じる").assertCountEquals(0)
         rule.onAllNodesWithText("返信").assertCountEquals(0)
+        // The keyboard lifts the sheet after the first measure: wait until it stops moving, then measure both again.
+        var last = Float.NaN
+        rule.waitUntil(5_000) {
+            val top = rule.onNodeWithTag("ftutter-post-send").fetchSemanticsNode().boundsInWindow.top
+            (top == last).also { last = top }
+        }
+        // Both are read in one go after the sheet settles; the keyboard can still move it between two reads.
+        fun bounds(tag: String) = rule.onNodeWithTag(tag).fetchSemanticsNode().boundsInWindow
+        rule.waitUntil(5_000) { kotlin.math.abs(bounds("ftutter-post-title").top - bounds("ftutter-post-name").top) <= 2f }
+        val titleNow = bounds("ftutter-post-title")
+        val name = bounds("ftutter-post-name")
+        assertEquals("題名とおなまえは横並び", titleNow.top, name.top, 2f)
+        assertTrue(name.left > titleNow.right - 1f)
         val send = rule.onNodeWithTag("ftutter-post-send").fetchSemanticsNode().boundsInWindow
-        assertTrue("書き込むは右下", send.right > width * 0.8f && send.top > title.bottom)
+        // With the keyboard up the fields scroll (the title may sit behind the band), so compare with the focused comment.
+        val comment = rule.onNodeWithTag("ftutter-post-comment").fetchSemanticsNode().boundsInWindow
+        assertTrue("書き込むは右下 send=$send comment=$comment width=$width", send.right > width * 0.8f && send.top >= comment.bottom - 1f)
         shot("t-b3-sheet")
     }
 

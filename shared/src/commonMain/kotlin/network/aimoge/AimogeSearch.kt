@@ -141,13 +141,23 @@ suspend fun searchAimogeLiveThreads(api: AimogeApi, slug: String, query: String)
  * The search of an あいもげ board: the live threads whose posts hold the words first, then the archived ones.
  * A failure of one side is not shown while the other has rows; when both fail, the archive's error is thrown.
  */
-suspend fun searchAimogeThreads(api: AimogeApi, slug: String, query: String, limit: Int = 20): List<ArchiveSearchItem> =
+suspend fun searchAimogeThreads(
+    api: AimogeApi,
+    slug: String,
+    query: String,
+    limit: Int = 20,
+    onSourceFailure: (String) -> Unit = {}
+): List<ArchiveSearchItem> =
     kotlinx.coroutines.coroutineScope {
         val live = async { com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation { searchAimogeLiveThreads(api, slug, query) } }
         val archived = async { com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation { searchAimogeArchiveThreads(api, slug, query, limit) } }
-        val liveRows = live.await(); val archivedRows = archived.await()
-        if (liveRows.isFailure && archivedRows.isFailure) throw archivedRows.exceptionOrNull()!!
-        (liveRows.getOrDefault(emptyList()) + archivedRows.getOrDefault(emptyList())).distinctBy { it.threadId }
+        val liveRows = live.await()
+        val archivedRows = archived.await()
+        val rows = (liveRows.getOrDefault(emptyList()) + archivedRows.getOrDefault(emptyList())).distinctBy { it.threadId }
+        if (rows.isEmpty()) (archivedRows.exceptionOrNull() ?: liveRows.exceptionOrNull())?.let { throw it }
+        if (liveRows.isFailure) onSourceFailure("あいもげの現行スレを検索できませんでした")
+        if (archivedRows.isFailure) onSourceFailure("あいもげの過去ログを検索できませんでした")
+        rows
     }
 
 /** Reads `/archive/{slug}?q=` with [api]. */
@@ -169,12 +179,18 @@ suspend fun searchAimogeArchiveThreadsWithOwnClient(
     slug: String,
     query: String,
     limit: Int = 20,
-    makeClient: () -> HttpClient = { createAimogeHttpClient(appVersion = "") }
-): List<ArchiveSearchItem> = withContext(Dispatchers.Default) {
-    val client = makeClient()
-    try {
-        searchAimogeThreads(AimogeApi(client), slug, query, limit)
-    } finally {
-        withContext(NonCancellable) { client.close() }
+    makeClient: () -> HttpClient = { createAimogeHttpClient(appVersion = "") },
+    onSourceFailure: (String) -> Unit = {}
+): List<ArchiveSearchItem> {
+    val failures = mutableListOf<String>()
+    val rows = withContext(Dispatchers.Default) {
+        val client = makeClient()
+        try {
+            searchAimogeThreads(AimogeApi(client), slug, query, limit) { failures.add(it) }
+        } finally {
+            withContext(NonCancellable) { client.close() }
+        }
     }
+    failures.forEach(onSourceFailure)
+    return rows
 }

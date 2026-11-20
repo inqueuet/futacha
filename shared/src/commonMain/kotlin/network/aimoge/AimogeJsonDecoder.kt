@@ -302,7 +302,7 @@ internal fun aimogePollHtml(
         for (option in options) {
             val label = escapeHtml(option.label.replace('\n', ' '))
             val mine = if (state?.selectedOptionId == option.id) "（あなたの回答）" else ""
-            sb.append("<br>・")
+            sb.append(if (canVote) "<br><br>・" else "<br>・")
             if (canVote && option.id.isNotBlank()) sb.append("<a href=\"$AIMOGE_POLL_LINK_PREFIX$postId/${option.id}\">$label</a>") else sb.append(label).append(mine)
         }
         if (canVote) sb.append("<br>（選択肢を押すと回答できます）")

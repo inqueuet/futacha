@@ -101,7 +101,7 @@ internal fun imageDiskCacheFailureMessage(
     "location=${diagnostic.location.name.lowercase()}, " +
     "cache=${diagnostic.cacheKind.name.lowercase()}"
 
-internal fun <T> attemptImageDiskCacheInitialization(
+internal inline fun <T> attemptImageDiskCacheInitialization(
     stage: ImageDiskCacheFailureStage,
     location: CompatibilityCacheLocation,
     directoryName: String,
@@ -109,6 +109,8 @@ internal fun <T> attemptImageDiskCacheInitialization(
     block: () -> T
 ): T? = try {
     block()
+} catch (cancelled: kotlinx.coroutines.CancellationException) {
+    throw cancelled
 } catch (_: Throwable) {
     reportFailure(
         ImageDiskCacheFailureDiagnostic(
@@ -493,7 +495,7 @@ fun rememberFutachaImageLoader(
         } finally {
             stableImageLoader.finishDiskCacheInitialization()
             if (!handedOffToLoader) {
-                createdDiskCache?.let(SharedImageDiskCaches::release)
+                createdDiskCache?.let(::releaseImageLoaderDiskCache)
             }
         }
     }
@@ -841,7 +843,7 @@ fun resolveImageCacheDirectory(
     ensureCacheDirectory(platformContext, location, directoryName)
 }
 
-private fun createImageDiskCache(
+private suspend fun createImageDiskCache(
     platformContext: Any?,
     maxBytes: Long,
     location: CompatibilityCacheLocation,
@@ -864,7 +866,16 @@ private fun createImageDiskCache(
 internal fun shutdownImageLoaderAndReleaseDiskCache(loader: ImageLoader) {
     val diskCache = loader.diskCache
     loader.shutdown()
-    diskCache?.let(SharedImageDiskCaches::release)
+    diskCache?.let(::releaseImageLoaderDiskCache)
+}
+
+private val imageDiskCacheReleaseScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + AppDispatchers.io)
+
+private fun releaseImageLoaderDiskCache(cache: DiskCache) {
+    imageDiskCacheReleaseScope.launch {
+        runCatching { SharedImageDiskCaches.release(cache) }
+            .onFailure { Logger.e("ImageLoader", "Failed to release image disk cache", it) }
+    }
 }
 
 private fun ensureCacheDirectory(

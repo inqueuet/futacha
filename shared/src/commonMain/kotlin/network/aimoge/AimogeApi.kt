@@ -3,7 +3,7 @@ package com.valoser.futacha.shared.network.aimoge
 import com.valoser.futacha.shared.util.readResponseBody
 import com.valoser.futacha.shared.network.NetworkException
 import io.ktor.client.HttpClient
-import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
 import io.ktor.client.request.header
 import io.ktor.http.HttpHeaders
 import io.ktor.http.encodeURLPathPart
@@ -23,12 +23,12 @@ class AimogeApi(private val client: HttpClient) {
     suspend fun get(path: String, boardKey: String? = null): String {
         require(path.startsWith("/") && !path.startsWith("//")) { "path" }
         val url = AIMOGE_API_BASE + path
-        val response = try {
-            readResponseBody { client.get(url) {
+        return try {
+            readResponseBody { client.prepareGet(url) {
                 header("X-Api-Version", AIMOGE_API_VERSION)
                 header(HttpHeaders.Accept, "application/json")
                 boardKey?.let { header("X-Board-Key", it) }
-            } }
+            }.execute { response -> readResponse(response) } }
         } catch (e: CancellationException) {
             throw e
         } catch (e: NetworkException) {
@@ -36,6 +36,9 @@ class AimogeApi(private val client: HttpClient) {
         } catch (e: Exception) {
             throw NetworkException("あいもげに接続できませんでした", cause = e)
         }
+    }
+
+    private suspend fun readResponse(response: io.ktor.client.statement.HttpResponse): String {
         val status = response.status.value
         // Read with a limit while receiving: bodyAsText() took the whole answer into memory before the size check
         // (audit 2026-11-12 L2). JSON is UTF-8; the bytes are decoded off the main thread.

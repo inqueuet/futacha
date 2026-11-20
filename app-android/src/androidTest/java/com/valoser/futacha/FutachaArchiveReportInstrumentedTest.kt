@@ -95,15 +95,15 @@ class FutachaArchiveReportInstrumentedTest {
         rule.waitUntil(10_000) { rule.onAllNodesWithText("REPORT-1", substring = true).fetchSemanticsNodes().isNotEmpty() }
     }
 
-    @Test fun aThreadReadFromTheBoardIsNotedWithNothingStored() {
+    @Test fun aThreadReadFromTheBoardIsNotedAfterOptIn() {
+        runBlocking { store.savePreference(ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY, "ON") }
         openThread()
         rule.waitUntil(10_000) { runBlocking { store.archiveReportOutboxStats() }.pendingOrRetry == 1 }
         rule.waitUntil(5_000) { enqueued.isNotEmpty() }
         assertEquals(1, enqueued.first())
     }
 
-    @Test fun nothingIsNotedWithTheSharedSwitchOff() {
-        runBlocking { store.savePreference(ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY, "OFF") }
+    @Test fun nothingIsNotedUntilTheSharedSwitchIsEnabled() {
         openThread()
         Thread.sleep(2_000)
         rule.waitForIdle()
@@ -115,8 +115,8 @@ class FutachaArchiveReportInstrumentedTest {
         host { FutachaArchiveReportSettingRow() }
         rule.waitUntil(5_000) { rule.onAllNodesWithText("過去ログ保存サービスへ通知", substring = true).fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithTag("futacha-archive-report-switch").performClick()
-        rule.waitUntil(5_000) { runBlocking { store.loadPreference(ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY) } == "OFF" }
+        rule.waitUntil(5_000) { runBlocking { store.loadPreference(ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY) } == "ON" }
         rule.waitUntil(5_000) { switched.isNotEmpty() }
-        assertEquals(listOf(false), switched.toList())
+        assertEquals(listOf(true), switched.toList())
     }
 }

@@ -6,12 +6,14 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.automirrored.rounded.VolumeOff
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.ZoomIn
+import androidx.compose.material.icons.rounded.ScreenRotation
 import androidx.compose.material.icons.rounded.ZoomOut
 import com.valoser.futacha.shared.ui.util.ScrollableToolbarRow
 
@@ -342,7 +344,9 @@ internal fun CompatViewerScreen(
     // HorizontalPager is subcomposing its pages.
     val mediaDimensions = remember(tabKey) { mutableMapOf<String, Pair<Int, Int>>() }
     val videoMediaInfo = remember(tabKey) { mutableStateMapOf<String, VideoMediaInfo>() }
-    var isSaving by remember { mutableStateOf(false) }
+    // Only the image being saved is blocked; saving the next image while one is still
+    // writing used to be dropped silently, leaving gaps in rapid saves (aimg seq31).
+    val savingUrls = remember { mutableStateListOf<String>() }
     var toolbarItems by remember { mutableStateOf(reconcileCompatToolbar(CompatToolbarSurface.VIEWER, emptyList())) }
     // Telephoto's FlickToDismiss keeps the unmodified drag offset as state. The
     // rubber-banded value is only used for rendering; using the rendered value
@@ -558,9 +562,9 @@ internal fun CompatViewerScreen(
         imagePrefetcher.update(requests, currentUrl)
     }
     fun saveCurrentNow(mediaUrl: String, shareAfterSave: Boolean, selectedLocation: SaveLocation?) {
-        if (isSaving) return
+        if (mediaUrl in savingUrls) return
         // Claim the guard before the coroutine is dispatched (E-13).
-        isSaving = true
+        savingUrls += mediaUrl
         (if (shareAfterSave) scope else saveCoroutineScope ?: scope).launchCompatScreenAction("CompatViewerSave", { failure ->
             val text = failure.toCompatUserMessage("画像を保存できませんでした")
             if (screenPresent[0]) message = text else onSaveNotice(text)
@@ -602,13 +606,13 @@ internal fun CompatViewerScreen(
                             if (screenPresent[0]) message = text else onSaveNotice(text)
                         }
                 }
-            } finally { isSaving = false }
+            } finally { savingUrls.remove(mediaUrl) }
         }
     }
     val choosePhotoSaveDestination = com.valoser.futacha.shared.ui.board.rememberPhotoSaveDestination(httpClient, fileSystem) { message = it }
     fun saveCurrent(shareAfterSave: Boolean) {
         val mediaUrl = posts.getOrNull(pagerState.currentPage)?.let(::resolveCompatViewerMediaUrl) ?: return
-        if (isSaving) return
+        if (mediaUrl in savingUrls) return
         if (shareAfterSave) withSaveDestination { saveCurrentNow(mediaUrl, true, it) }
         else choosePhotoSaveDestination(mediaUrl) { withSaveDestination { saveCurrentNow(mediaUrl, false, it) } }
     }
@@ -1123,6 +1127,21 @@ internal fun CompatViewerScreen(
                     com.valoser.futacha.shared.ui.board.PlatformKeepScreenOnEffect(
                         compatViewerKeepsScreenOn(page == pagerState.currentPage, playbackState)
                     )
+                    // aimg seq46: with 「動画の操作パネルを自動で隠す」 ON the panel and bars go away once the video plays,
+                    // instead of waiting for a tap (the player's own timer was reset by every recomposition).
+                    val autoHideMillis = viewerBehaviour.videoOptions.controlsAutoHideMillis ?: 0
+                    LaunchedEffect(page == pagerState.currentPage, playbackState, chromeVisible, autoHideMillis) {
+                        if (compatViewerShouldAutoHideVideoChrome(
+                                isCurrentPage = page == pagerState.currentPage,
+                                state = playbackState,
+                                chromeVisible = chromeVisible,
+                                autoHideMillis = autoHideMillis
+                            )
+                        ) {
+                            kotlinx.coroutines.delay(autoHideMillis.toLong())
+                            chromeVisible = false
+                        }
+                    }
                     val videoPromptMetadata = rememberGenerationMetadata(playingUrl,
                         visible = page == pagerState.currentPage && !threadPrivacyEnabled)
                     val posterUrl = post?.thumbnailUrl
@@ -1133,6 +1152,12 @@ internal fun CompatViewerScreen(
                     // may 1447425813: a video can be zoomed too. A button steps 1x→2x→3x; while zoomed a drag moves it.
                     var videoZoom by remember(mediaUrl) { mutableStateOf(com.valoser.futacha.shared.ui.board.AttachmentZoom()) }
                     var videoBox by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+                    // aimg seq46: turn a landscape video 90° so it fills the screen (the screen goes landscape).
+                    var videoRotated by remember(mediaUrl) { mutableStateOf(false) }
+                    // mediaDimensions is a plain map (no recomposition), so the button reads this state.
+                    var videoSize by remember(mediaUrl) { mutableStateOf(mediaDimensions[mediaUrl]) }
+                    val isCurrentVideoPage = page == pagerState.currentPage
+                    if (videoRotated && isCurrentVideoPage) CompatVideoLandscapeEffect()
                     Box(modifier = Modifier.fillMaxSize().onSizeChanged { videoBox = it }) {
                         Box(Modifier.fillMaxSize().graphicsLayer {
                             scaleX = videoZoom.scale; scaleY = videoZoom.scale
@@ -1155,7 +1180,7 @@ internal fun CompatViewerScreen(
                                 }
                             },
                             onVideoSizeKnown = { width, height ->
-                                if (width > 0 && height > 0) mediaDimensions[mediaUrl] = width to height
+                                if (width > 0 && height > 0) { mediaDimensions[mediaUrl] = width to height; videoSize = width to height }
                             },
                             onMediaInfoKnown = { info -> videoMediaInfo[mediaUrl] = info },
                             onPlaybackError = { playbackError = it },
@@ -1185,6 +1210,15 @@ internal fun CompatViewerScreen(
                                         .background(Color.Black.copy(alpha = 0.45f), CircleShape)) {
                                     Icon(if (videoZoom.scale >= COMPAT_VIDEO_ZOOM_STEPS.last()) Icons.Rounded.ZoomOut else Icons.Rounded.ZoomIn,
                                         contentDescription = "動画を拡大（${compatVideoZoomLabel(videoZoom)}）", tint = Color.White)
+                                }
+                                if (compatShowVideoRotateButton(compatCanForceLandscape, videoSize, videoRotated)) {
+                                    Spacer(Modifier.width(8.dp))
+                                    IconButton(onClick = { videoRotated = !videoRotated },
+                                        modifier = Modifier.testTag("compat-video-rotate")
+                                            .background(Color.Black.copy(alpha = 0.45f), CircleShape)) {
+                                        Icon(Icons.Rounded.ScreenRotation,
+                                            contentDescription = if (videoRotated) "縦に戻す" else "横にして全画面", tint = Color.White)
+                                    }
                                 }
                             }
                         }
@@ -1285,7 +1319,7 @@ internal fun CompatViewerScreen(
         CompatLegacyChoiceDialog(
             onDismiss = { quickMenu = false },
             choices = compatViewerQuickMenuLabels() + if (copyImage != null) listOf("画像をコピー") else emptyList(),
-            enabled = { it == "検索" || !isSaving },
+            enabled = { it == "検索" || posts.getOrNull(pagerState.currentPage)?.let(::resolveCompatViewerMediaUrl) !in savingUrls },
             testTag = "compat-viewer-quick-menu",
             onChoice = { choice ->
                 when (choice) {

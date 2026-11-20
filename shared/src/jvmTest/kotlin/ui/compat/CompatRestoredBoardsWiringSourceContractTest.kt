@@ -25,15 +25,15 @@ class CompatRestoredBoardsWiringSourceContractTest {
         // them into the AppStateStore (mergeRestoredBoardsIntoAppState) before any board synchronization can run.
         val restores = Regex("""withSharedBoardsRestore\(""").findAll(text).toList()
         assertEquals(2, restores.size, "the file picker and the folder picker both restore")
-        assertTrue(text.contains("""withSharedBoardsRestore(store, restoreBoardsInto.takeIf { modernPresentation }, keep = { it.isSuccess }, historyStore = restoreBoardsInto ?: stateStore)"""))
+        assertTrue(text.contains("""store, restoreBoardsInto.takeIf { modernPresentation }, keep = { it.isSuccess && backupKind != "ng" }"""))
         // Saving a backup restores nothing, so it neither merges nor keeps anything.
         assertTrue(text.contains("""val restoring = !kind.startsWith("save_")"""))
-        assertTrue(text.contains("""restoreBoardsInto.takeIf { modernPresentation && restoring }, keep = { restoring && it.isSuccess }"""))
+        assertTrue(text.contains("""restoreBoardsInto.takeIf { modernPresentation && restoring }, keep = { restoring && kind != "ng" && it.isSuccess }"""))
         assertFalse(text.contains("mergeRestoredBoardsIntoAppState("), "the merge is the wrapper's, not the screen's")
         assertTrue(source("../compat/shared/SharedBoards.kt").contains("mergeRestoredBoardsIntoAppState(compat, appStateStore)"))
         // Plan B3: the restored history reaches the AppState history in every mode (としあき(仮)'s own store included).
         assertEquals(2, Regex("""historyStore = restoreBoardsInto \?: stateStore""").findAll(text).count())
-        assertTrue(source("../compat/shared/SharedBoards.kt").contains("mergeRestoredHistoryIntoAppState(compat, historyStore)"))
+        assertTrue(source("../compat/shared/SharedBoards.kt").contains("mergeRestoredHistoryIntoAppState(compat, historyStore, historyUrls)"))
     }
 
     @Test

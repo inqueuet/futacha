@@ -8,6 +8,7 @@ import com.valoser.futacha.shared.network.extractArchiveSearchScope
 import com.valoser.futacha.shared.network.extractPastSearchScope
 import com.valoser.futacha.shared.network.searchInqueuetArchiveThreads
 import com.valoser.futacha.shared.ui.compat.buildCompatArchiveSourceThreadUrl
+import com.valoser.futacha.shared.ui.compat.filterCompatArchiveSearchItems
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -55,6 +56,34 @@ class AimogeArchiveSearchTest {
         assertEquals(0, items[1].replyCount)
     }
 
+    @Test fun archiveBodyHitsSurviveTheTitleFilter() {
+        val rows = parseAimogeArchiveSearch(body, "aimg")
+        assertEquals(rows, com.valoser.futacha.shared.ui.compat.filterCompatArchiveSearchItems(rows, "まとめ", "OR", rows.associate { it.threadId to setOf("まとめ") }))
+    }
+
+    @Test fun archiveBooleanSearchUsesRemoteBodyMatches() = runTest {
+        val rows = parseAimogeArchiveSearch(body, "aimg")
+        val matches = com.valoser.futacha.shared.ui.compat.searchCompatAimogeTerms(listOf("赤", "青")) { term ->
+            if (term == "赤") rows else rows.take(1)
+        }
+        assertEquals(rows, filterCompatArchiveSearchItems(matches.rows, "赤 青", "OR", matches.termsByThread))
+        assertEquals(rows.take(1), filterCompatArchiveSearchItems(matches.rows, "赤 青", "AND", matches.termsByThread))
+    }
+
+    @Test fun partialFailureWithNoHitsIsReported() = runTest {
+        val client = HttpClient(MockEngine { request ->
+            if (request.url.encodedPath == "/search") respond("""{"posts":[]}""", HttpStatusCode.OK)
+            else respond("{}", HttpStatusCode.ServiceUnavailable)
+        })
+        try {
+            kotlin.test.assertFailsWith<com.valoser.futacha.shared.network.NetworkException> {
+                searchAimogeThreads(AimogeApi(client), "aimg", "検索語")
+            }
+        } finally {
+            client.close()
+        }
+    }
+
     @Test fun theRequestCarriesTheBoardKeyAndTheEncodedWords() = runTest {
         var url = ""; var key: String? = null
         val client = HttpClient(MockEngine { request ->
@@ -73,7 +102,7 @@ class AimogeArchiveSearchTest {
         // The thread fallbacks still see no scope for あいもげ.
         assertNull(extractArchiveSearchScope("https://nijiurachan.net/b/aimg/"))
         var asked: Pair<String, String>? = null
-        aimogeArchiveSearcher = { slug, query, _ -> asked = slug to query; listOf(ArchiveSearchItem("t", "aimoge", slug, htmlUrl = "u")) }
+        aimogeArchiveSearcher = { slug, query, _, _ -> asked = slug to query; listOf(ArchiveSearchItem("t", "aimoge", slug, htmlUrl = "u")) }
         var futabaRequests = 0
         val futaba = HttpClient(MockEngine { futabaRequests++; respond("[]", HttpStatusCode.OK) })
         val items = searchInqueuetArchiveThreads(futaba, Json, "ふたちゃ", scope, includeAllSources = true)
@@ -124,6 +153,9 @@ class AimogeArchiveSearchTest {
         val rows = searchAimogeThreads(AimogeApi(client), "aimg", "ふたちゃ")
         assertEquals(listOf("live", "live", "archived", "archived"), rows.map { it.status })
         failArchive = true
-        assertEquals(2, searchAimogeThreads(AimogeApi(client), "aimg", "ふたちゃ").size)
+        val failures = mutableListOf<String>()
+        assertEquals(2, searchAimogeThreads(AimogeApi(client), "aimg", "ふたちゃ") { failures += it }.size)
+        assertEquals(listOf("あいもげの過去ログを検索できませんでした"), failures)
+        client.close()
     }
 }

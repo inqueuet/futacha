@@ -20,7 +20,10 @@ actual fun rememberAttachmentPickerLauncher(preference: AttachmentPickerPreferen
             val extensions = when (mimeType) {
                 "image/*" -> setOf("jpg", "jpeg", "png", "gif", "webp", "avif", "bmp")
                 "video/*" -> setOf("mp4", "webm", "mov")
-                else -> emptySet()
+                // "image/jpeg,image/png": only those types (jpeg also allows jpg).
+                else -> mimeType.split(',').map { it.trim().substringAfter('/').lowercase() }
+                    .filter { it.isNotEmpty() && it != "*" }
+                    .flatMap { if (it == "jpeg") listOf("jpg", "jpeg") else listOf(it) }.toSet()
             }
             chooseDesktopFile("添付ファイルを選択", extensions)?.let { selected(readDesktopAttachment(it, maxBytes)) }
         } catch (cancelled: CancellationException) { throw cancelled }

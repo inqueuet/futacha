@@ -92,6 +92,35 @@ class ThreadOpeningReadBaselineInstrumentedTest {
         rule.waitUntil(10_000) { runBlocking { state.history.first().single().lastViewedSnapshot?.lastPostId == "102" } }
     }
 
+    @Test fun toshiakiDrawerShowsTheOpeningSummaryWhenEnabled() = checkToshiakiDrawerSummary(true)
+
+    @Test fun toshiakiDrawerHidesTheOpeningSummaryWhenDisabled() = checkToshiakiDrawerSummary(false)
+
+    private fun checkToshiakiDrawerSummary(enabled: Boolean) {
+        val tabKey = compatTabKey(url)
+        page = page.copy(posts = (100..106).map { post(it.toString()) })
+        runBlocking {
+            store.openTab(CompatTab(tabKey, url, url, compatBoardKey(board.url), board.name, "100", entry.title,
+                replyCount = 1, checkedReplyCount = 1, insertedAtEpochMillis = 1, contentUpdatedAtEpochMillis = 1))
+            store.savePreferences(compatOwnPostMarkerSave(emptyMap(), tabKey, "100"))
+            store.savePreference(THREAD_OPEN_SUMMARY_KEY, if (enabled) "ON" else "OFF")
+        }
+        rule.setContent { Images { CompatibilityApp(store = store, repository = repo, stateStore = state, onExitApplication = {}) } }
+        rule.onNodeWithContentDescription("ドロワー").performClick()
+        rule.onNodeWithContentDescription("開いているタブ").performClick()
+        rule.onNodeWithTag("compat-drawer-tab-row-$tabKey").performClick()
+        rule.waitUntil(15_000) {
+            runBlocking { state.history.first().any { it.lastViewedSnapshot?.lastPostId == "106" } }
+        }
+        val openingNotice = rule.onNodeWithTag("compat-thread-opening-summary")
+        if (enabled) {
+            openingNotice.assertIsDisplayed().assertTextEquals("新着5件・自分への返信0件")
+        } else {
+            openingNotice.assertDoesNotExist()
+        }
+        rule.onNodeWithTag("compat-manual-refresh-notice").assertDoesNotExist()
+    }
+
     @Test fun futaberOwnSeenCountWinsOverBackgroundMetadata() {
         val otherModeEntry = entry.copy(lastViewedSnapshot = ThreadViewedSnapshot(1, "100", 1))
         runBlocking { state.updateHistory { listOf(otherModeEntry) } }

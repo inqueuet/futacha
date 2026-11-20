@@ -8,7 +8,7 @@ import kotlinx.coroutines.CancellationException
 /** How many pictures one pick may bring on a Futaba board (1 attachment and the rest to あぷ小, one by one). */
 internal const val COMPAT_MULTI_PICK_FUTABA_MAX = 10
 
-internal const val COMPAT_MULTI_PICK_LABEL = "画像を複数選択"
+internal const val COMPAT_MULTI_PICK_LABEL = "画像・動画を複数選択"
 
 internal fun compatMultiPickMax(isAimoge: Boolean): Int = if (isAimoge) AIMOGE_EXTRA_PICTURES_MAX + 1 else COMPAT_MULTI_PICK_FUTABA_MAX
 

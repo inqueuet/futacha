@@ -89,6 +89,9 @@ internal suspend fun fetchThreadSaveHtml(
             httpClient.prepareGet(threadUrl) {
                 headers[HttpHeaders.Referrer] = BoardUrlResolver.resolveBoardBaseUrl(request.boardUrl)
             }.execute { response ->
+                if (response.status.value == 404 || response.status.value == 410) {
+                    throw ThreadSaveThreadGoneException(response.status.toString())
+                }
                 if (!response.status.isSuccess()) {
                     throw Exception("Fetch thread HTML failed: ${response.status}")
                 }
@@ -331,7 +334,8 @@ private suspend fun <T> withThreadSaveMediaSource(
             if (!response.status.isSuccess()) {
                 throw ThreadSaveMediaDownloadFailure(
                     message = "Download failed: ${response.status}",
-                    retryable = isThreadSaveMediaHttpStatusRetryable(response.status.value)
+                    retryable = isThreadSaveMediaHttpStatusRetryable(response.status.value),
+                    httpStatus = response.status.value
                 )
             }
             val channel = response.bodyAsChannel()

@@ -374,6 +374,9 @@ class AppStateStore internal constructor(
 
     suspend fun clearHistory() = historyOperations.clearHistory()
 
+    internal suspend fun clearHistoryIf(covered: (List<ThreadHistoryEntry>) -> Boolean) =
+        historyOperations.clearHistoryIf(covered)
+
     suspend fun updateHistory(
         transform: (List<ThreadHistoryEntry>) -> List<ThreadHistoryEntry>
     ) = historyOperations.updateHistory(transform)

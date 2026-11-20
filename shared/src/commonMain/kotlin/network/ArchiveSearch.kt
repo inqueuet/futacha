@@ -232,8 +232,10 @@ fun buildDirectArchiveSearchItems(
  * stay with inqueuet alone.
  */
 /** Tests replace this to count the あいもげ archive searches without a network. */
-internal var aimogeArchiveSearcher: suspend (slug: String, query: String, limit: Int) -> List<ArchiveSearchItem> =
-    { slug, query, limit -> com.valoser.futacha.shared.network.aimoge.searchAimogeArchiveThreadsWithOwnClient(slug, query, limit) }
+internal var aimogeArchiveSearcher: suspend (String, String, Int, (String) -> Unit) -> List<ArchiveSearchItem> =
+    { slug, query, limit, onFailure ->
+        com.valoser.futacha.shared.network.aimoge.searchAimogeArchiveThreadsWithOwnClient(slug, query, limit, onSourceFailure = onFailure)
+    }
 
 suspend fun searchInqueuetArchiveThreads(
     httpClient: HttpClient,
@@ -253,7 +255,7 @@ suspend fun searchInqueuetArchiveThreads(
     scope?.aimogeSlug?.let { slug ->
         // あいもげ: its own archive only; the Futaba services never see an あいもげ board.
         require(normalized.length <= com.valoser.futacha.shared.network.aimoge.AIMOGE_SEARCH_QUERY_MAX_CHARS) { "q exceeds ${com.valoser.futacha.shared.network.aimoge.AIMOGE_SEARCH_QUERY_MAX_CHARS} characters" }
-        return aimogeArchiveSearcher(slug, normalized, limit)
+        return aimogeArchiveSearcher(slug, normalized, limit, onSourceFailure)
     }
     if (archiveBaseUrl != null || buildDirectArchiveSearchItems(normalized, scope, archiveBaseUrl).isNotEmpty()) {
         return searchInqueuetArchiveThreadsOnly(httpClient, archiveSearchJson, normalized, scope, limit, archiveBaseUrl)

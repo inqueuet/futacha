@@ -444,6 +444,7 @@ internal fun CompatPostScreen(
     repository: BoardRepository?,
     httpClient: HttpClient? = null,
     store: CompatibilityStore,
+    stateStore: com.valoser.futacha.shared.state.AppStateStore? = null,
     toolbarRefreshToken: Long = 0L,
     onPostSent: () -> Unit = {},
     preferences: Map<String, String>,
@@ -534,7 +535,7 @@ internal fun CompatPostScreen(
         mutableStateOf(defaultBoardPostingCapabilities(board.canonicalUrl))
     }
     val attachmentLimitBytes = postingCapabilities.maxFileSizeBytes.toInt()
-    val storedDeleteKey = preferences.compatStoredPostDeleteKey()
+    val storedDeleteKey = rememberCompatPostDeleteKey(preferences, stateStore, board.originalUrl)
 
     // These read the form's state (commentState, not the composed comment): the writer run as the screen closes
     // was made in an earlier composition (L52).
@@ -1006,10 +1007,7 @@ internal fun CompatPostScreen(
                             }
                         }
                         finishLocalStep {
-                            store.savePreference(
-                                COMPAT_POST_DELETE_KEY_STORAGE_KEY,
-                                compatPostDeleteKeyForStorage(deleteKey)
-                            )
+                            store.saveCompatPostDeleteKey(stateStore, board.originalUrl, deleteKey)
                         }
                         if (!isBuild) {
                             responseId?.let { raw ->

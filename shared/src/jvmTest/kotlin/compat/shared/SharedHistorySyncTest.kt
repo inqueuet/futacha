@@ -126,11 +126,15 @@ class SharedHistorySyncTest {
     @Test fun restoredHistoryShowsInEveryModeEvenIfDeletedBefore() = withSync { compat, state, _ ->
         openInFutacha(state, "700", now)
         waitUntil("copied") { "700" in compat.threads() }
+        val oldUrlForRestoredThread = compat.history.first().single().canonicalUrl
         val backup = compat.exportSettingsBackup()
         dismissHistoryEntry(state, autoSavedThreadRepository = null, compatibilityStore = compat, entry = state.history.first().single())
         assertEquals(emptySet(), state.threads())
         // In としあき(仮) (no boards merged into AppState) the history still reaches it.
-        withSharedBoardsRestore(compat, appStateStore = null, keep = { true }, historyStore = state) {
+        withSharedBoardsRestore(
+            compat, appStateStore = null, keep = { true }, historyStore = state,
+            restoredHistoryUrls = { setOf(oldUrlForRestoredThread) }
+        ) {
             compat.importSettingsBackup(backup, restoreUserSettings = true, restoreNgRules = false)
         }
         assertTrue("700" in compat.threads(), "restored in としあき(仮)")

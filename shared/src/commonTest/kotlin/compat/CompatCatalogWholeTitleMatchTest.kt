@@ -45,6 +45,10 @@ class CompatCatalogWholeTitleMatchTest {
         assertEquals(3, buildCompatCatalogProjection(request(items, query = "カレー")).size)
         assertEquals(setOf("0", "1"), buildCompatCatalogProjection(request(items, query = "カレーうどん")).map { it.id }.toSet())
         assertEquals("かれーudon", normalizeCompatCatalogMatchText("カレーＵＤＯＮ"))
+        assertEquals(
+            com.valoser.futacha.shared.model.normalizeCatalogSearchText("ｶﾞﾝﾀﾞﾑ"),
+            com.valoser.futacha.shared.model.normalizeCatalogSearchText("ガンダム")
+        )
         assertEquals(normalizeCompatCatalogMatchText("ｶﾞﾝﾀﾞﾑ"), normalizeCompatCatalogMatchText("ガンダム"))
         val board = CompatBoard("board", "may", "https://may.2chan.net/b/", "https://may.2chan.net/b/", 0)
         val matches = collectCompatWatchMatches(board, items, listOf("カレーうどん"), emptyList(), 0L)

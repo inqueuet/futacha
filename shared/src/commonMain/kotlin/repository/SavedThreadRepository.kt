@@ -311,7 +311,8 @@ class SavedThreadRepository(
      */
     suspend fun addThreadSnapshotToIndex(
         thread: SavedThread,
-        mutationStartedAtMillis: Long = Clock.System.now().toEpochMilliseconds()
+        mutationStartedAtMillis: Long = Clock.System.now().toEpochMilliseconds(),
+        replacesArchiveStorageId: String? = null
     ): Result<Unit> = runSuspendCatchingNonCancellation {
         mutationMutex.withLock {
             val storageId = resolveSavedThreadStorageId(thread)
@@ -320,14 +321,21 @@ class SavedThreadRepository(
             val evictedStorageIds = withIndexLock {
                 if (mutationStartedAtMillis <= purgeCutoffMillis(identityKey)) return@withIndexLock null
                 val newStorageId = storageId
+                val superseded = linkedSetOf<String>()
                 this@SavedThreadRepository.mutateIndexThreadsReturningEvictedUnlocked { threads ->
                     threads
-                        .filterNot { resolveSavedThreadStorageId(it) == newStorageId }
+                        .filterNot { existing ->
+                            val existingId = resolveSavedThreadStorageId(existing)
+                            existingId == newStorageId || (
+                                replacesArchiveStorageId != null &&
+                                    isImportedArchiveStorageRevision(existingId, replacesArchiveStorageId)
+                                ).also { if (it) superseded.add(existingId) }
+                        }
                         .plus(thread)
                         .sortedByDescending { it.savedAt }
                 }
                     .mapTo(linkedSetOf()) { resolveSavedThreadStorageId(it) }
-                    .apply { remove(newStorageId) }
+                    .apply { addAll(superseded); remove(newStorageId) }
             }
             if (evictedStorageIds == null) {
                 ThreadStorageLockRegistry.withStorageLock(storageLockKey(storageId)) {

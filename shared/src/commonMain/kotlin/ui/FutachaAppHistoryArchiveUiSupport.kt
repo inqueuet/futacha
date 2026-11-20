@@ -11,6 +11,7 @@ import com.valoser.futacha.shared.repository.MAX_HISTORY_ARCHIVE_MANIFEST_BYTES
 import com.valoser.futacha.shared.repository.MAX_HISTORY_ARCHIVE_TOTAL_FILES
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.repository.safeHistoryArchiveExportSizeAdd
+import com.valoser.futacha.shared.repository.readHistoryArchiveBytes
 import com.valoser.futacha.shared.state.AppHistoryArchiveImportResult
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.state.exportAppHistoryArchive
@@ -60,7 +61,7 @@ internal fun buildFutachaHistoryArchiveExportMessage(
 ): String {
     val base = "履歴アーカイブを作成しました: ${entryCount}件 ($archiveDirectory)"
     return if (omittedEntryCount > 0) {
-        "$base。1回に保存できるのは${MAX_HISTORY_ARCHIVE_ENTRIES}件までのため、閲覧が古い${omittedEntryCount}件は含まれていません"
+        "$base。件数・容量の上限により${omittedEntryCount}件が含まれていません"
     } else {
         base
     }
@@ -76,7 +77,7 @@ internal fun buildFutachaHistoryArchiveExportKeptHistoryMessage(
     omittedEntryCount: Int
 ): String {
     return "履歴アーカイブを作成しました: ${entryCount}件 ($archiveDirectory)。" +
-        "1回に保存できるのは${MAX_HISTORY_ARCHIVE_ENTRIES}件までで、閲覧が古い${omittedEntryCount}件が含まれないため、履歴は削除していません"
+        "件数・容量の上限により${omittedEntryCount}件が含まれないため、履歴は削除していません"
 }
 
 internal fun buildFutachaHistoryArchiveExportCopyFailedKeptHistoryMessage(
@@ -130,7 +131,7 @@ internal suspend fun exportAllFutachaHistoryArchiveThenClear(
     fileSystem: FileSystem?,
     sourceRepositories: List<SavedThreadRepository>,
     appVersion: String?,
-    clearHistory: suspend () -> Unit
+    clearHistory: suspend (HistoryArchiveManifest) -> Boolean
 ): String {
     val fs = fileSystem ?: return buildFutachaHistoryArchiveUnavailableMessage()
     val now = Clock.System.now().toEpochMilliseconds()
@@ -160,13 +161,12 @@ internal suspend fun exportAllFutachaHistoryArchiveThenClear(
     }
     // Clearing removes the whole history; entries added or revisited while the archive
     // was written are not in it and would be lost.
-    if (!isHistoryCoveredByArchive(stateStore.historyValue(), result.manifest)) {
+    if (!clearHistory(result.manifest)) {
         return buildFutachaHistoryArchiveExportChangedKeptHistoryMessage(
             entryCount = result.manifest.entryCount,
             archiveDirectory = result.archiveDirectory
         )
     }
-    clearHistory()
     return buildFutachaHistoryArchiveExportThenClearMessage(
         entryCount = result.manifest.entryCount,
         archiveDirectory = result.archiveDirectory
@@ -343,8 +343,8 @@ private suspend fun loadBoundedHistoryArchiveManifest(
     val size = runSuspendCatchingPreservingCancellation { fileSystem.getFileSize(path) }.getOrNull()
         ?: return null
     if (size !in 0L..MAX_HISTORY_ARCHIVE_MANIFEST_BYTES) return null
-    val payload = fileSystem.readString(path).getOrNull() ?: return null
-    if (payload.encodeToByteArray().size.toLong() > MAX_HISTORY_ARCHIVE_MANIFEST_BYTES) return null
+    val payload = fileSystem.readHistoryArchiveBytes(path, MAX_HISTORY_ARCHIVE_MANIFEST_BYTES).getOrNull()
+        ?.decodeToString() ?: return null
     val manifest = withContext(AppDispatchers.parsing) {
         runCatching {
             json.decodeFromString(HistoryArchiveManifest.serializer(), payload)
@@ -373,16 +373,16 @@ private suspend fun AppStateStore.historyValue(): List<ThreadHistoryEntry> {
     return readHistory()
 }
 
-/** Whether every current entry is in [manifest] with the same visit time. */
+/** Whether the archive contains the current revisions of all history rows. */
 internal fun isHistoryCoveredByArchive(
     currentHistory: List<ThreadHistoryEntry>,
     manifest: HistoryArchiveManifest
 ): Boolean {
     val archived = manifest.entries.associate { entry ->
-        buildHistoryIdentityKey(entry.historyEntry) to entry.historyEntry.lastVisitedEpochMillis
+        buildHistoryIdentityKey(entry.historyEntry) to entry.historyEntry
     }
     return currentHistory.all { entry ->
-        archived[buildHistoryIdentityKey(entry)]?.let { it >= entry.lastVisitedEpochMillis } == true
+        archived[buildHistoryIdentityKey(entry)]?.copy(hasSelfPost = entry.hasSelfPost) == entry
     }
 }
 

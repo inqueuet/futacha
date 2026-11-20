@@ -160,12 +160,12 @@ class FutaberParityB45InstrumentedTest {
         rule.onNodeWithTag("futaber-manage-category-History").performClick()
     }
 
-    @Test fun byDefaultNoneOfTheNewEntriesIsThereAndTheViewedThreadIsNoted() {
+    @Test fun byDefaultNoneOfTheNewEntriesIsThereAndTheViewedThreadIsNotNoted() {
         host(emptyMap())
         val threadId = openFirstThread()
-        // "閲覧スレ通知" is on with nothing stored: the may thread is in the outbox (nothing is sent from here).
-        rule.waitUntil(10_000) { runBlocking { store.archiveReportOutboxStats() }.pendingOrRetry == 1 }
-        assertTrue(enqueued.isNotEmpty())
+        rule.waitForIdle()
+        assertEquals(0, runBlocking { store.archiveReportOutboxStats() }.pendingOrRetry)
+        assertTrue(enqueued.isEmpty())
         tabOn(threadId)
         rule.onAllNodesWithTag("futaber-tab")[0].performTouchInput { longClick() }
         waitForTag("futaber-action-tab-cancel")
@@ -188,9 +188,9 @@ class FutaberParityB45InstrumentedTest {
         rule.onNodeWithTag("futaber-history-archive").performClick()
         waitForTag("futaber-history-archive-chooser")
         rule.onNodeWithTag("futaber-history-archive-export").performClick()
-        rule.waitUntil(5_000) { rule.onAllNodesWithText("すべてエクスポート").fetchSemanticsNodes().isNotEmpty() }
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("最新2000件までエクスポート").fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithText("閉じる").performClick()
-        rule.waitUntil(5_000) { rule.onAllNodesWithText("すべてエクスポート").fetchSemanticsNodes().isEmpty() }
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("最新2000件までエクスポート").fetchSemanticsNodes().isEmpty() }
         rule.onNodeWithTag("futaber-history-clear-all").performClick()
         waitForTag("futaber-history-clear-dialog")
         rule.onNodeWithTag("futaber-history-clear-confirm").performClick()
@@ -232,7 +232,7 @@ class FutaberParityB45InstrumentedTest {
     }
 
     @Test fun theSettingsSwitchTurnsTheSharedArchiveReportOffAndNothingIsNotedThen() {
-        host(emptyMap())
+        host(mapOf(ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY to "ON"))
         waitForTag("futaber-catalog-item")
         rule.onNodeWithTag("futaber-open-settings").performClick()
         waitForTag("futaber-settings")

@@ -6,14 +6,13 @@ import com.valoser.futacha.shared.compat.aimogeUnverifiedDelEnabled
 import com.valoser.futacha.shared.compat.aimogeUnverifiedPostingEnabled
 import io.ktor.client.HttpClient
 import io.ktor.client.request.HttpRequestBuilder
-import io.ktor.client.request.delete
-import io.ktor.client.request.get
+import io.ktor.client.request.prepareDelete
+import io.ktor.client.request.prepareGet
 import io.ktor.client.request.header
-import io.ktor.client.request.post
-import io.ktor.client.request.put
+import io.ktor.client.request.preparePost
+import io.ktor.client.request.preparePut
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
-import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.Url
@@ -264,46 +263,46 @@ private val writeJson = Json { ignoreUnknownKeys = true; isLenient = true }
 
 class AimogeWriteApi(private val client: HttpClient) {
     internal suspend fun altcha(boardSlug: String, token: String): AimogeWriteAnswer =
-        send { client.get("$AIMOGE_API_BASE/altcha") { common(boardSlug); header("x-aimg-token", token) } }
+        send { client.prepareGet("$AIMOGE_API_BASE/altcha") { common(boardSlug); header("x-aimg-token", token) } }
 
     internal suspend fun presign(boardSlug: String, token: String, body: JsonObject): AimogeWriteAnswer =
-        send { client.post("$AIMOGE_API_BASE/attachments/presign") { common(boardSlug); header("x-aimg-token", token); json(body) } }
+        send { client.preparePost("$AIMOGE_API_BASE/attachments/presign") { common(boardSlug); header("x-aimg-token", token); json(body) } }
 
     /** The signed address carries its own permission: no token, no board key, no API version. */
     internal suspend fun upload(uploadUrl: String, mime: String, bytes: ByteArray): AimogeWriteAnswer =
-        send { client.put(uploadUrl) { header(HttpHeaders.ContentType, mime); setBody(bytes) } }
+        send { client.preparePut(uploadUrl) { header(HttpHeaders.ContentType, mime); setBody(bytes) } }
 
     internal suspend fun reply(boardSlug: String, threadId: String, token: String, body: JsonObject): AimogeWriteAnswer =
         send {
-            client.post("$AIMOGE_API_BASE/threads/${threadId.encodeURLPathPart()}/posts") {
+            client.preparePost("$AIMOGE_API_BASE/threads/${threadId.encodeURLPathPart()}/posts") {
                 common(boardSlug); header("x-aimg-token", token); json(body)
             }
         }
 
     internal suspend fun createThread(boardSlug: String, token: String, body: JsonObject): AimogeWriteAnswer =
         send {
-            client.post("$AIMOGE_API_BASE/threads/${boardSlug.encodeURLPathPart()}") {
+            client.preparePost("$AIMOGE_API_BASE/threads/${boardSlug.encodeURLPathPart()}") {
                 common(boardSlug); header("x-aimg-token", token); json(body)
             }
         }
 
     internal suspend fun react(boardSlug: String, postId: String, type: String, token: String, deleteKey: String): AimogeWriteAnswer =
         send {
-            client.put("$AIMOGE_API_BASE/posts/${postId.encodeURLPathPart()}/reactions/${type.encodeURLPathPart()}") {
+            client.preparePut("$AIMOGE_API_BASE/posts/${postId.encodeURLPathPart()}/reactions/${type.encodeURLPathPart()}") {
                 common(boardSlug); header("x-aimg-token", token); header("x-aimg-delete-key", aimogeDeleteKeyHeader(deleteKey))
             }
         }
 
     internal suspend fun deleteOwn(boardSlug: String, postId: String, token: String, deleteKey: String): AimogeWriteAnswer =
         send {
-            client.delete("$AIMOGE_API_BASE/posts/${postId.encodeURLPathPart()}") {
+            client.prepareDelete("$AIMOGE_API_BASE/posts/${postId.encodeURLPathPart()}") {
                 common(boardSlug); header("x-aimg-token", token); json(buildJsonObject { put("deleteKey", deleteKey) })
             }
         }
 
     internal suspend fun pollVote(boardSlug: String, postId: String, optionId: String, token: String, deleteKey: String): AimogeWriteAnswer =
         send {
-            client.put("$AIMOGE_API_BASE/posts/${postId.encodeURLPathPart()}/poll/vote") {
+            client.preparePut("$AIMOGE_API_BASE/posts/${postId.encodeURLPathPart()}/poll/vote") {
                 common(boardSlug); header("x-aimg-token", token); header("x-aimg-delete-key", aimogeDeleteKeyHeader(deleteKey))
                 json(buildJsonObject { put("optionId", optionId) })
             }
@@ -311,14 +310,14 @@ class AimogeWriteApi(private val client: HttpClient) {
 
     internal suspend fun report(boardSlug: String, threadId: String, body: JsonObject, token: String, deleteKey: String): AimogeWriteAnswer =
         send {
-            client.post("$AIMOGE_API_BASE/threads/${threadId.encodeURLPathPart()}/report") {
+            client.preparePost("$AIMOGE_API_BASE/threads/${threadId.encodeURLPathPart()}/report") {
                 common(boardSlug); header("x-aimg-token", token); header("x-aimg-delete-key", aimogeDeleteKeyHeader(deleteKey)); json(body)
             }
         }
 
     internal suspend fun closeThread(boardSlug: String, threadId: String, token: String, deleteKey: String): AimogeWriteAnswer =
         send {
-            client.post("$AIMOGE_API_BASE/threads/${threadId.encodeURLPathPart()}/close") {
+            client.preparePost("$AIMOGE_API_BASE/threads/${threadId.encodeURLPathPart()}/close") {
                 common(boardSlug); header("x-aimg-token", token); json(buildJsonObject { put("deleteKey", deleteKey) })
             }
         }
@@ -334,15 +333,18 @@ class AimogeWriteApi(private val client: HttpClient) {
         setBody(body.toString())
     }
 
-    private suspend fun send(request: suspend () -> HttpResponse): AimogeWriteAnswer {
-        val response = try {
-            readResponseBody { request() }
+    private suspend fun send(request: suspend () -> io.ktor.client.statement.HttpStatement): AimogeWriteAnswer {
+        return try {
+            readResponseBody { request().execute { response -> readAnswer(response) } }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             // Ktor's text holds the address (a thread UUID or a signed upload address): only the kind is kept.
             throw AimogeNoAnswerException(timedOut = isTimeout(e))
         }
+    }
+
+    private suspend fun readAnswer(response: HttpResponse): AimogeWriteAnswer {
         val text = try {
             readAimogeControlBody(response)
         } catch (e: CancellationException) {
@@ -488,6 +490,30 @@ class AimogeRequestLedger(
         if (next != state.confirmTargets) save(state.copy(confirmTargets = next))
     }
 
+    private val keyLocks = mutableMapOf<String, Mutex>()
+    private val keyLocksGuard = Mutex()
+
+    internal suspend fun withSendLock(key: String, block: suspend () -> AimogeWriteOutcome): AimogeWriteOutcome {
+        // The lock is taken and released under the guard, and dropped from the table once free (no growth).
+        val lock = keyLocksGuard.withLock {
+            val lock = keyLocks.getOrPut(key) { Mutex() }
+            if (!lock.tryLock()) null else lock
+        }
+        if (lock == null) return AimogeWriteOutcome.Refused(AIMOGE_SENDING_MESSAGE)
+        try {
+            return block()
+        } finally {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                keyLocksGuard.withLock {
+                    lock.unlock()
+                    if (keyLocks[key] === lock) keyLocks.remove(key)
+                }
+            }
+        }
+    }
+
+    internal suspend fun heldKeyLockCount(): Int = keyLocksGuard.withLock { keyLocks.size }
+
     internal suspend fun size(): Int = mutex.withLock { pruned(load()).entries.size }
 }
 
@@ -498,19 +524,22 @@ const val AIMOGE_LEDGER_MAX_ENTRIES = 200
 const val AIMOGE_LEDGER_LIFETIME_MILLIS = 24 * 60 * 60 * 1000L
 
 /** The host sets the store of the request record at launch (Android `aimoge-requests.enc`, iOS its own Keychain service). */
+@OptIn(kotlin.concurrent.atomics.ExperimentalAtomicApi::class)
 object AimogeWriteRegistry {
-    var ledgerStorage: AimogeSecretStorage? = null
+    private class Registration(val storage: AimogeSecretStorage?) {
+        val ledger = AimogeRequestLedger(storage)
+    }
+
+    private val registration = kotlin.concurrent.atomics.AtomicReference(Registration(null))
+    var ledgerStorage: AimogeSecretStorage?
+        get() = registration.load().storage
+        set(value) { registration.store(Registration(value)) }
+
     /** The app-lifetime scope writes run on, so closing a screen never stops a send half way. */
     val appScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private var shared: AimogeRequestLedger? = null
-    private var sharedStorage: AimogeSecretStorage? = null
 
-    /** One record for the whole app (two screens must find the same requestId). */
-    fun ledger(): AimogeRequestLedger {
-        val storage = ledgerStorage
-        shared?.takeIf { sharedStorage === storage }?.let { return it }
-        return AimogeRequestLedger(storage).also { shared = it; sharedStorage = storage }
-    }
+    /** One record and send lock registry for every screen in the app. */
+    fun ledger(): AimogeRequestLedger = registration.load().ledger
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -530,8 +559,6 @@ class AimogeWriteRepository(
     private val nowMillis: () -> Long = { kotlin.time.Clock.System.now().toEpochMilliseconds() },
     private val newRequestId: () -> String = ::randomRequestId
 ) {
-    private val keyLocks = mutableMapOf<String, Mutex>()
-    private val keyLocksGuard = Mutex()
 
     suspend fun reply(request: AimogeReplyRequest, confirmed: Boolean = false): AimogeWriteOutcome =
         write(
@@ -590,19 +617,21 @@ class AimogeWriteRepository(
         val fields = JsonObject(sent + ("deleteKey" to JsonPrimitive(deleteKey)))
         val attachmentMeta = sent["_attachment"]
         val bare = JsonObject(fields - "_attachment" - EXTRA_ATTACHMENTS_FIELD)
-        val canonical = canonicalOf(bare, attachmentMeta) + extrasCanonical(sent[EXTRA_ATTACHMENTS_FIELD] as? JsonArray)
+        val canonical = aimogeRequestCanonical(bare, attachmentMeta, sent[EXTRA_ATTACHMENTS_FIELD] as? JsonArray, target)
         if (ledger.keyOf(canonical) != entry.key) return AimogeWriteOutcome.Refused(AIMOGE_DELETE_KEY_CHANGED_MESSAGE)
         val identity = authNow.writeIdentity() ?: return AimogeWriteOutcome.NeedsApproval
         if (entry.credentialId != null && entry.credentialId != identity.credentialId && !confirmed) {
             return AimogeWriteOutcome.ConfirmFirst(AIMOGE_UNCONFIRMED_POST_LEAD + AIMOGE_CONFIRM_NEW_POST_MESSAGE)
         }
-        return locked(entry.key) {
-            appScope.async {
-                post(entry, identity, bare, boardSlug, emptySet(), threadId == null, recordSent = fields) { token, json ->
+        return appScope.async {
+            ledger.withSendLock(entry.key) {
+                val current = ledger.find(entry.key)?.takeIf { it.unconfirmed }
+                    ?: return@withSendLock AimogeWriteOutcome.Refused(AIMOGE_SAME_AS_BEFORE_MESSAGE)
+                post(current.copy(credentialId = identity.credentialId), identity, bare, boardSlug, emptySet(), threadId == null, recordSent = fields) { token, json ->
                     if (threadId == null) api.createThread(boardSlug, token, json) else api.reply(boardSlug, threadId, token, json)
                 }
-            }.await()
-        }
+            }
+        }.await()
     }
 
     /** そうだね or del on the post with UUID [postId]. del is refused without a request unless the debug-only value allows it. */
@@ -778,22 +807,22 @@ class AimogeWriteRepository(
         val prepared = typed?.let { (it, mime) -> it to describeAttachment(it, mime) }
         val preparedExtras = typedExtras.map { (it, mime) -> it to describeAttachment(it, mime) }
         val extrasMeta = preparedExtras.takeIf { it.isNotEmpty() }?.let { list -> JsonArray(list.map { it.second }) }
-        val key = ledger.keyOf(canonicalOf(fields, prepared?.second) + extrasCanonical(extrasMeta) + "|" + target)
+        val key = ledger.keyOf(aimogeRequestCanonical(fields, prepared?.second, extrasMeta, target))
 
         if (ledger.needsConfirm(target) && !confirmed) return AimogeWriteOutcome.ConfirmFirst(AIMOGE_CONFIRM_NEW_POST_MESSAGE)
-        return locked(key) {
-            appScope.async {
+        return appScope.async {
+            ledger.withSendLock(key) {
                 val previous = ledger.find(key)
                 if (previous != null && previous.unconfirmed && previous.credentialId != null &&
                     previous.credentialId != identity.credentialId && !confirmed
                 ) {
-                    return@async AimogeWriteOutcome.ConfirmFirst(AIMOGE_UNCONFIRMED_POST_LEAD + AIMOGE_CONFIRM_NEW_POST_MESSAGE)
+                    return@withSendLock AimogeWriteOutcome.ConfirmFirst(AIMOGE_UNCONFIRMED_POST_LEAD + AIMOGE_CONFIRM_NEW_POST_MESSAGE)
                 }
                 if (confirmed) ledger.setConfirm(target, false)
                 var entry = previous ?: AimogeLedgerEntry(key = key, requestId = newRequestId(), target = target, savedAtMillis = nowMillis())
                 entry = entry.copy(credentialId = identity.credentialId)
                 // Written before anything is sent, so a crash keeps the requestId.
-                if (!ledger.put(entry)) return@async AimogeWriteOutcome.Refused(AIMOGE_LEDGER_FULL_MESSAGE)
+                if (!ledger.put(entry)) return@withSendLock AimogeWriteOutcome.Refused(AIMOGE_LEDGER_FULL_MESSAGE)
 
                 if (prepared != null && entry.attachmentId == null) {
                     when (val up = upload(boardSlug, identity.credential, prepared.first, prepared.second)) {
@@ -801,7 +830,7 @@ class AimogeWriteRepository(
                             entry = entry.copy(attachmentId = up.attachmentId)
                             ledger.put(entry)
                         }
-                        is UploadResult.Failed -> return@async up.outcome
+                        is UploadResult.Failed -> return@withSendLock up.outcome
                     }
                 }
                 // The 2nd and 3rd go up in order; an id already kept (a retry) is not uploaded again.
@@ -812,14 +841,14 @@ class AimogeWriteRepository(
                             entry = entry.copy(extraAttachmentIds = entry.extraAttachmentIds + up.attachmentId)
                             ledger.put(entry)
                         }
-                        is UploadResult.Failed -> return@async up.outcome
+                        is UploadResult.Failed -> return@withSendLock up.outcome
                     }
                 }
                 var sentFields = prepared?.let { JsonObject(fields + ("_attachment" to it.second)) } ?: fields
                 if (extrasMeta != null) sentFields = JsonObject(sentFields + (EXTRA_ATTACHMENTS_FIELD to extrasMeta))
                 post(entry, identity, fields, boardSlug, known, knownIsThread, recordSent = sentFields, send = send)
-            }.await()
-        }
+            }
+        }.await()
     }
 
     private sealed interface UploadResult {
@@ -988,27 +1017,7 @@ class AimogeWriteRepository(
         return null
     }
 
-    private suspend fun <T> locked(key: String, block: suspend () -> T): T where T : Any {
-        // The lock is taken and released under the guard, and dropped from the table once free (no growth).
-        val lock = keyLocksGuard.withLock {
-            val lock = keyLocks.getOrPut(key) { Mutex() }
-            if (!lock.tryLock()) null else lock
-        }
-        @Suppress("UNCHECKED_CAST")
-        if (lock == null) return AimogeWriteOutcome.Refused(AIMOGE_SENDING_MESSAGE) as T
-        try {
-            return block()
-        } finally {
-            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
-                keyLocksGuard.withLock {
-                    lock.unlock()
-                    if (keyLocks[key] === lock) keyLocks.remove(key)
-                }
-            }
-        }
-    }
-
-    internal suspend fun heldKeyLockCount(): Int = keyLocksGuard.withLock { keyLocks.size }
+    internal suspend fun heldKeyLockCount(): Int = ledger.heldKeyLockCount()
 }
 
 /** The same words as Futaba's action messages (`HTTP_BOARD_API_ACTION_RESULT_UNCONFIRMED`), so screens tell them apart. */
@@ -1036,6 +1045,13 @@ internal fun extrasCanonical(extras: JsonArray?): String =
     if (extras.isNullOrEmpty()) "" else "|+" + JsonArray(extras.map { e ->
         JsonObject((e as JsonObject).entries.sortedBy { it.key }.associate { it.key to it.value })
     }).toString()
+
+private fun aimogeRequestCanonical(
+    fields: JsonObject,
+    attachmentMeta: JsonElement?,
+    extrasMeta: JsonArray?,
+    target: String
+): String = canonicalOf(fields, attachmentMeta) + extrasCanonical(extrasMeta) + "|" + target
 
 /** Every sent field (sorted) and the attachment's description: the source of the record's key. */
 internal fun canonicalOf(fields: JsonObject, attachmentMeta: JsonElement?): String {

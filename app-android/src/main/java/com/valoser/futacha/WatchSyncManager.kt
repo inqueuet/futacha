@@ -104,6 +104,7 @@ class WatchSyncManager(
     private val snapshotBuilder = WatchSnapshotBuilder()
     private val previousReplyCountsMutex = Mutex()
     private val previousReplyCounts = mutableMapOf<WatchThreadKey, Int>()
+    private var lastAcknowledgedSnapshotMillis = 0L
     private val snapshotRequestMutex = Mutex()
     private val pendingSnapshotAckMutex = Mutex()
     private val pendingSnapshotAcks = LinkedHashMap<String, WatchSnapshot>()
@@ -958,6 +959,8 @@ class WatchSyncManager(
         } ?: return
 
         previousReplyCountsMutex.withLock {
+            if (snapshot.generatedAtMillis <= lastAcknowledgedSnapshotMillis) return@withLock
+            lastAcknowledgedSnapshotMillis = snapshot.generatedAtMillis
             val activeKeys = snapshot.threads.mapTo(mutableSetOf()) { it.toPreviousReplyCountKey() }
             previousReplyCounts.keys.retainAll(activeKeys)
             snapshot.threads.forEach { thread ->

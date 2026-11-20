@@ -193,6 +193,7 @@ class ThreadSaveService(
 
                 // ダウンロードフェーズ
                 var rawHtmlRelativePath: String? = null
+                var threadGone = false
                 val mediaPlan = buildThreadSaveMediaDownloadPlan(
                     posts = if (additionalMediaUrls.isEmpty()) posts else posts + additionalMediaUrls.distinct().mapIndexed { index, url ->
                         Post(id = "extra-$index", author = null, subject = null, timestamp = "",
@@ -408,6 +409,7 @@ class ThreadSaveService(
                     }
                 )
                 rawHtmlRelativePath = rawHtmlWriteResult.relativePath
+                threadGone = rawHtmlWriteResult.threadGone
                 totalSize += rawHtmlWriteResult.sizeBytes
 
                 // 変換フェーズ
@@ -457,7 +459,7 @@ class ThreadSaveService(
                         isTruncated = isTruncated,
                         truncationReason = truncationReason,
                         baseTotalSize = totalSize,
-                        isHtmlMissing = rawHtmlOptions.enable && rawHtmlRelativePath == null
+                        isHtmlMissing = rawHtmlOptions.enable && rawHtmlRelativePath == null && !threadGone
                     ),
                     encodeMetadata = json::encodeToString
                 )
@@ -488,7 +490,9 @@ class ThreadSaveService(
                     skippedMediaCount = skippedMediaCount,
                     totalMediaCount = totalMediaCount,
                     isContentTruncated = isTruncated,
-                    isHtmlMissing = rawHtmlOptions.enable && rawHtmlRelativePath == null
+                    isHtmlMissing = rawHtmlOptions.enable && rawHtmlRelativePath == null && !threadGone,
+                    threadGone = threadGone,
+                    goneFailureCount = mediaDownloadResult.goneFailureCount
                 )
             })
         } catch (e: CancellationException) {

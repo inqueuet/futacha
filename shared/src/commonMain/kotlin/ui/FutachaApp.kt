@@ -357,6 +357,8 @@ fun FutachaApp(
             LocalFutachaAppUnlocked provides !isAppHidden,
             LocalFutachaAppLockHolder provides appLockHolder,
             LocalPostingInFlight provides postingInFlight,
+            com.valoser.futacha.shared.ui.board.LocalThreadSearchJumpState provides
+                remember(experienceProfile) { com.valoser.futacha.shared.ui.board.ThreadSearchJumpState() },
             com.valoser.futacha.shared.ui.board.LocalFutachaAppVersion provides
                 remember(versionChecker) { versionChecker?.getCurrentVersion().orEmpty() }
         ) {

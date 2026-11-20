@@ -146,6 +146,33 @@ internal class AppStateHistoryOperations(
         }
     }
 
+    /** Checks the archive coverage inside the same history mutation that removes the rows. */
+    suspend fun clearHistoryIf(covered: (List<ThreadHistoryEntry>) -> Boolean): List<ThreadHistoryEntry>? {
+        return deletionGate.withLock {
+            ensureTombstonesLoadedLocked()
+            var removed: List<ThreadHistoryEntry>? = null
+            runMutation(
+                missingSnapshotMessage = "Skipping archived history clear due to missing snapshot",
+                buildPlan = { current ->
+                    if (covered(current)) AppStateHistoryMutationPlan(emptyList(), current) else null
+                },
+                onCommitted = { current ->
+                    val deletedAt = Clock.System.now().toEpochMilliseconds()
+                    current.forEach { entry ->
+                        historyEntryIdentity(entry).takeIf(String::isNotBlank)?.let { key ->
+                            deletedHistoryAtByKey[key] =
+                                HistoryTombstone(deletedAt, nextDeletionSequence(), entry.lastVisitedEpochMillis)
+                        }
+                    }
+                    trimDeletedHistoryTombstones()
+                    removed = current
+                }
+            ) { current -> "Failed to clear ${current.size} archived history entries" }
+            if (removed != null) persistTombstonesLocked()
+            removed
+        }
+    }
+
     suspend fun updateHistory(
         transform: (List<ThreadHistoryEntry>) -> List<ThreadHistoryEntry>
     ) {

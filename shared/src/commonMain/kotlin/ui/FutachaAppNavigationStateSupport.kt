@@ -4,8 +4,8 @@ import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.listSaver
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
-import com.valoser.futacha.shared.compat.canonicalizeBoardUrl
-import com.valoser.futacha.shared.compat.canonicalizeThreadUrl
+import com.valoser.futacha.shared.compat.canonicalizeSiteBoardUrl
+import com.valoser.futacha.shared.compat.canonicalizeSiteThreadUrlAsLegacy
 import com.valoser.futacha.shared.ui.board.RegisteredThreadNavigation
 import com.valoser.futacha.shared.mix.MixDefinition
 import com.valoser.futacha.shared.mix.ResolvedMix
@@ -77,9 +77,9 @@ internal fun resolveFutachaThreadDeepLink(
     boards: List<BoardSummary>,
     history: List<ThreadHistoryEntry>
 ): FutachaThreadDeepLinkResolution {
-    val parsed = canonicalizeThreadUrl(rawUrl) ?: return FutachaThreadDeepLinkResolution.Invalid
+    val parsed = canonicalizeSiteThreadUrlAsLegacy(rawUrl) ?: return FutachaThreadDeepLinkResolution.Invalid
     val board = boards.firstOrNull { candidate ->
-        canonicalizeBoardUrl(candidate.url)?.equals(parsed.canonicalBoardUrl, ignoreCase = true) == true
+        canonicalizeSiteBoardUrl(candidate.url)?.canonicalUrl?.equals(parsed.canonicalBoardUrl, ignoreCase = true) == true
     } ?: return FutachaThreadDeepLinkResolution.UnregisteredBoard(parsed.canonicalUrl)
     val historyEntry = history.firstOrNull { entry ->
         entry.threadId == parsed.threadNo && entry.boardId == board.id

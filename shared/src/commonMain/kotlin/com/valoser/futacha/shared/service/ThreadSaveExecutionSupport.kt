@@ -50,7 +50,8 @@ internal data class ThreadSaveMediaDownloadBatchResult(
     val mediaCounts: ThreadSaveMediaCounts,
     val totalSizeBytes: Long,
     val downloadFailureCount: Int,
-    val skippedMediaCount: Int
+    val skippedMediaCount: Int,
+    val goneFailureCount: Int = 0
 )
 
 internal data class ThreadSaveMediaDownloadSeed(
@@ -80,8 +81,13 @@ internal data class ThreadSaveMetadataWriteRequest(
 
 internal data class ThreadSaveRawHtmlWriteResult(
     val relativePath: String?,
-    val sizeBytes: Long
+    val sizeBytes: Long,
+    /** The thread page answered 404/410: it has fallen, so there is no original HTML to keep (may 1448774997). */
+    val threadGone: Boolean = false
 )
+
+/** The thread page is gone from the server (404/410). */
+internal class ThreadSaveThreadGoneException(status: String) : Exception("Thread is gone: $status")
 
 internal data class ThreadSaveOutputPreparationRequest(
     val boardPath: String,
@@ -208,6 +214,7 @@ internal suspend fun executeThreadSaveMediaDownloadPlan(
         mediaCounts = accumulator.mediaCounts,
         totalSizeBytes = accumulator.totalSizeBytes,
         downloadFailureCount = accumulator.downloadFailureCount,
+        goneFailureCount = accumulator.goneFailureCount,
         skippedMediaCount = plan.skippedMediaCount + plan.scheduledItems.size - processedMediaCount
     )
 }
@@ -370,7 +377,7 @@ internal suspend fun saveThreadRawHtmlIfEnabled(
         .getOrElse { error ->
             if (error is kotlinx.coroutines.CancellationException) throw error
             logWarning("Failed to save raw HTML: ${error.message}")
-            ThreadSaveRawHtmlWriteResult(relativePath = null, sizeBytes = 0L)
+            ThreadSaveRawHtmlWriteResult(relativePath = null, sizeBytes = 0L, threadGone = error is ThreadSaveThreadGoneException)
         }
 }
 
@@ -391,7 +398,9 @@ internal fun buildThreadSaveSavedThread(
     totalMediaCount: Int,
     isContentTruncated: Boolean = false,
     statusOverride: SaveStatus? = null,
-    isHtmlMissing: Boolean = false
+    isHtmlMissing: Boolean = false,
+    threadGone: Boolean = false,
+    goneFailureCount: Int = 0
 ): SavedThread {
     return SavedThread(
         threadId = threadId,
@@ -411,7 +420,12 @@ internal fun buildThreadSaveSavedThread(
             incompleteMediaCount = downloadFailureCount + skippedMediaCount,
             totalMediaCount = totalMediaCount,
             isContentTruncated = isContentTruncated
-        )
+        ).let {
+            // A fallen thread's posts are saved even when none of its pictures could be fetched any more.
+            // Only when every failed picture is gone from the server (404/410): other failures (a write error) stay FAILED.
+            // This does not need the raw HTML, so it is the same with that setting on or off.
+            if (it == SaveStatus.FAILED && downloadFailureCount > 0 && goneFailureCount == downloadFailureCount) SaveStatus.PARTIAL else it
+        }
     )
 }
 

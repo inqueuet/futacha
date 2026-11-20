@@ -8,9 +8,9 @@ import com.valoser.futacha.shared.util.TextEncoding
 import com.valoser.futacha.shared.util.sanitizeForShiftJis
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
 import io.ktor.client.HttpClient
-import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
 import io.ktor.client.request.forms.formData
-import io.ktor.client.request.forms.submitFormWithBinaryData
+import io.ktor.client.request.forms.prepareFormWithBinaryData
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.Headers
@@ -43,7 +43,7 @@ internal suspend fun uploadCompatUps(
     require(attachment.bytes.size <= COMPAT_UPS_MAX_BYTES) { "ファイルサイズ超過です\n3000KBまで" }
     require(deleteKey.isNotBlank()) { "削除キーがありません" }
     val token = stableCompatHash("${attachment.fileName}:$nowEpochMillis")
-    val response = readResponseBody { client.submitFormWithBinaryData(
+    val responseBody = readResponseBody { client.prepareFormWithBinaryData(
         url = COMPAT_UPS_ENDPOINT,
         formData = formData {
             append("mode", "reg")
@@ -71,9 +71,10 @@ internal suspend fun uploadCompatUps(
         headers[HttpHeaders.CacheControl] = "no-cache"
         headers[HttpHeaders.Pragma] = "no-cache"
         headers[HttpHeaders.Referrer] = "https://dec.2chan.net/up2/"
+    }.execute { response ->
+        if (!response.status.isSuccess()) error("Http ${response.status.value} Error")
+        readBoundedHttpResponseText(response, COMPAT_UPS_RESPONSE_MAX_BYTES)
     } }
-    val responseBody = readBoundedHttpResponseText(response, COMPAT_UPS_RESPONSE_MAX_BYTES)
-    if (!response.status.isSuccess()) error("Http ${response.status.value} Error")
     val errorMessage = compatUpsErrorRegex
         .find(responseBody.replace('\n', ' '))?.groupValues?.getOrNull(1)
     if (!errorMessage.isNullOrBlank()) {
@@ -87,10 +88,13 @@ internal suspend fun uploadCompatUps(
     // generated fuXXXXX.ext name in up.htm. Keep that observable behavior instead
     // of inventing a URL from the local filename.
     delay(publishDelayMillis)
-    val indexResponse = readResponseBody { client.get(COMPAT_UPS_INDEX) }
-    val indexBody = readBoundedHttpResponseText(indexResponse, COMPAT_UPS_RESPONSE_MAX_BYTES)
-    if (!indexResponse.status.isSuccess()) {
-        error("トップページが取得できませんでした\nHTTP status ${indexResponse.status.value} error")
+    val indexBody = readResponseBody {
+        client.prepareGet(COMPAT_UPS_INDEX).execute { response ->
+            if (!response.status.isSuccess()) {
+                error("トップページが取得できませんでした\nHTTP status ${response.status.value} error")
+            }
+            readBoundedHttpResponseText(response, COMPAT_UPS_RESPONSE_MAX_BYTES)
+        }
     }
     findCompatUpsUploadedFileName(indexBody, token)
         ?: error("アップロードしたファイルが見つかりません")

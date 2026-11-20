@@ -32,7 +32,9 @@ internal data class ThreadSaveMediaDownloadAccumulator(
     val mediaKeyToFileInfoMap: MutableMap<String, ThreadSaveLocalFileInfo>,
     var mediaCounts: ThreadSaveMediaCounts = ThreadSaveMediaCounts(),
     var totalSizeBytes: Long = 0L,
-    var downloadFailureCount: Int = 0
+    var downloadFailureCount: Int = 0,
+    // Failures because the server no longer has the file (404/410), as with a fallen thread.
+    var goneFailureCount: Int = 0
 )
 
 internal suspend fun executeThreadSaveMediaBatch(
@@ -95,6 +97,7 @@ internal fun applyThreadSaveMediaBatchResults(
             }
             .onFailure { error ->
                 accumulator.downloadFailureCount += 1
+                if ((error as? ThreadSaveMediaDownloadFailure)?.httpStatus in setOf(404, 410)) accumulator.goneFailureCount += 1
                 Logger.e(
                     logTag,
                     "Failed to download (${describeUrlForLog(attempt.mediaItem.url)}), " +

@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree
 import androidx.compose.foundation.layout.Spacer
@@ -68,6 +69,21 @@ private fun rememberCompatPickerComponent(context: Context, component: Component
         .edit().putString(COMPAT_PICKER_COMPONENT_KEY, component.flattenToString()).apply()
 }
 
+// "image/jpeg,image/png" picks only those types: the intent type is the shared top-level type and the list goes in EXTRA_MIME_TYPES.
+internal fun pickerMimeTypes(mimeType: String): Pair<String, Array<String>?> {
+    val list = mimeType.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+    if (list.size < 2) return mimeType to null
+    val top = list.map { it.substringBefore('/') }.distinct().singleOrNull()
+    return (if (top != null) "$top/*" else "*/*") to list.toTypedArray()
+}
+
+private class GetContentWithMimeList : ActivityResultContracts.GetContent() {
+    override fun createIntent(context: Context, input: String): Intent {
+        val (type, extra) = pickerMimeTypes(input)
+        return super.createIntent(context, type).apply { if (extra != null) putExtra(Intent.EXTRA_MIME_TYPES, extra) }
+    }
+}
+
 private fun <I> launchPickerOrNotify(
     context: Context,
     launcher: ExperienceProfileActivityResultLauncher<I>,
@@ -83,6 +99,16 @@ private fun <I> launchPickerOrNotify(
     false
 }
 
+// The photo picker needs at least 2 and at most the system limit; the
+// callback still trims to maxCount in case a fallback picker ignores it.
+internal fun multiplePickerMaxItems(maxCount: Int, systemLimit: Int = photoPickerSystemLimit()): Int =
+    maxCount.coerceAtMost(systemLimit).coerceAtLeast(2)
+
+private fun photoPickerSystemLimit(): Int =
+    if (android.os.Build.VERSION.SDK_INT >= 33) {
+        runCatching { android.provider.MediaStore.getPickImagesMaxLimit() }.getOrDefault(Int.MAX_VALUE)
+    } else Int.MAX_VALUE
+
 @Composable
 actual fun rememberMultipleImagePickerLauncher(
     maxCount: Int,
@@ -97,7 +123,7 @@ actual fun rememberMultipleImagePickerLauncher(
     val failed by rememberUpdatedState(onSelectionError)
     if (context !is Activity) return null
     val launcher = rememberExperienceProfileActivityResultLauncher(
-        contract = ActivityResultContracts.GetMultipleContents()
+        contract = ActivityResultContracts.PickMultipleVisualMedia(multiplePickerMaxItems(maxCount))
     ) { uris, session ->
         if (uris.isEmpty() || isActivityUnavailable(context)) return@rememberExperienceProfileActivityResultLauncher
         coroutineScope.launch {
@@ -114,7 +140,13 @@ actual fun rememberMultipleImagePickerLauncher(
         }
     }
     return {
-        launchPickerOrNotify(context, launcher, "image/*", "multiple GET_CONTENT picker", "ファイル選択に対応したアプリがありません")
+        launchPickerOrNotify(
+            context,
+            launcher,
+            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo),
+            "multiple photo picker",
+            "画像・動画の選択に対応したアプリがありません"
+        )
     }
 }
 
@@ -175,7 +207,7 @@ actual fun rememberAttachmentPickerLauncher(
         }
     }
     val getContentLauncher = rememberExperienceProfileActivityResultLauncher(
-        contract = ActivityResultContracts.GetContent()
+        contract = GetContentWithMimeList()
     ) { uri, session ->
         uri?.let {
             handleImageUri(it, session)
