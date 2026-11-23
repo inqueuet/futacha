@@ -288,6 +288,7 @@ internal fun CompatViewerScreen(
     toolbarRefreshToken: Long = 0L,
     preferences: Map<String, String>,
     ngRules: List<CompatNgRule>,
+    commonNgRules: List<CompatNgRule> = emptyList(),
     httpClient: HttpClient?,
     fileSystem: FileSystem?,
     cookieRepository: CookieRepository? = null,
@@ -412,12 +413,15 @@ internal fun CompatViewerScreen(
     val imageNgPhashRules = remember(ngRules, tabKey) {
         ngRules.filter { it.kind == CompatNgKind.THREAD_IMAGE_PHASH && it.appliesToThreadImage(tab.boardKey, tabKey) }
     }
+    val hideNgPostMedia = preferences[COMPAT_HIDE_NG_MEDIA_KEY] == "ON" &&
+        preferences.compatPreferenceValue("thread", "threadNg", "NG機能") != "OFF"
     LaunchedEffect(
         tabKey,
         preparedSnapshot,
         ngRules,
+        commonNgRules,
+        hideNgPostMedia,
         upsThumbnailMethod,
-        wifiConnected,
         imageNgPhashThreshold,
         imageNgPhashRules,
         httpClient,
@@ -430,7 +434,7 @@ internal fun CompatViewerScreen(
         try {
             val hiddenImages = ngRules.asSequence()
                 .filter { it.kind == CompatNgKind.THREAD_IMAGE && it.appliesToThreadImage(tab.boardKey, tabKey) }
-                .mapTo(mutableSetOf(), CompatNgRule::normalizedValue)
+                .mapTo(mutableSetOf()) { normalizeCompatApuSmallMediaUrl(it.normalizedValue) }
             val snapshot = preparedSnapshot ?: store.loadThreadSnapshot(tabKey)
             snapshotRevision = snapshot?.revision ?: tab.snapshotRevision
             val rawPosts = snapshot
@@ -443,8 +447,19 @@ internal fun CompatViewerScreen(
                 .let { posts ->
                     presentCompatPostsForDeletedVisibilityOffMain(posts, showDeletedContent)
                 }
+            val mediaPosts = filterCompatNgMediaPosts(rawPosts, hideNgPostMedia, ngRules + commonNgRules, tab)
             if (directMediaUrl != null) {
+                val directThumbnail = compatApuSmallThumbnailUrl(directMediaUrl)
+                    .takeIf { isCompatVideoMediaUrl(directMediaUrl) }
+                if (compatMediaUrlIsNg(directMediaUrl, hiddenImages) || compatMediaUrlIsNg(directThumbnail, hiddenImages)) {
+                    loadedPosts = emptyList()
+                    return@LaunchedEffect
+                }
                 val sourcePost = rawPosts.firstOrNull { it.postNo == initialPostNo }
+                if (sourcePost != null && mediaPosts.none { it.postNo == sourcePost.postNo }) {
+                    loadedPosts = emptyList()
+                    return@LaunchedEffect
+                }
                 loadedPosts = listOf(
                     CompatPostSnapshot(
                         position = directSourcePosition ?: sourcePost?.position ?: 0,
@@ -452,32 +467,17 @@ internal fun CompatViewerScreen(
                         timestamp = sourcePost?.timestamp.orEmpty(),
                         messageHtml = sourcePost?.messageHtml.orEmpty(),
                         imageUrl = directMediaUrl,
-                        thumbnailUrl = compatApuSmallThumbnailUrl(directMediaUrl)
-                            .takeIf { isCompatVideoMediaUrl(directMediaUrl) },
+                        thumbnailUrl = directThumbnail,
                         mediaKey = "direct::$directMediaUrl"
                     )
                 )
                 return@LaunchedEffect
             }
-            // Open with the hashes that are already known and hide further
-            // pHash matches as their originals are hashed, instead of keeping
-            // the spinner up until up to 256 originals have been fetched.
-            collectCompatImagePhashHiddenPostNos(
-                httpClient = httpClient,
-                store = store,
-                posts = rawPosts,
-                rules = imageNgPhashRules,
-                threshold = imageNgPhashThreshold
-            ) { hiddenPostNos ->
-                loadedPosts = withContext(AppDispatchers.parsing) {
-                    compatViewerMediaPosts(
-                        posts = rawPosts,
-                        hiddenImages = hiddenImages,
-                        hiddenPostNos = hiddenPostNos,
-                        upsThumbnailMethod = upsThumbnailMethod,
-                        wifiConnected = wifiConnected
-                    )
-                }
+            collectCompatViewerMediaPosts(
+                httpClient, store, mediaPosts, hiddenImages, imageNgPhashRules,
+                imageNgPhashThreshold, upsThumbnailMethod
+            ) { visibleMedia ->
+                loadedPosts = visibleMedia
             }
         } catch (cancelled: CancellationException) {
             Logger.e("CompatViewer", "Media list load timed out", cancelled.compatTimeoutFailureOrThrow())
@@ -519,10 +519,18 @@ internal fun CompatViewerScreen(
         initialPage = compatViewerInitialPage(posts,
             returnPosition?.mediaIdentity ?: initialPostNo, returnPosition?.index ?: initialIndex)
     ) { posts.size }
-    val returnIndex = pagerState.currentPage
-    val returnIdentity = posts.getOrNull(returnIndex)?.let(::compatMediaIdentity)
-    androidx.compose.runtime.SideEffect {
-        if (returnIdentity != null) returnPosition?.update(returnIndex, returnIdentity)
+    // The pager retains the current media by its layout key when the list changes.
+    // Only record a position after its measured page agrees with the current list.
+    LaunchedEffect(pagerState, pagerKeys, returnPosition) {
+        if (returnPosition == null) return@LaunchedEffect
+        snapshotFlow {
+            val index = pagerState.currentPage
+            val measuredKey = pagerState.layoutInfo.visiblePagesInfo.firstOrNull { it.index == index }?.key
+            posts.getOrNull(index)?.takeIf { measuredKey != null && measuredKey == pagerKeys.getOrNull(index) }
+                ?.let { index to compatMediaIdentity(it) }
+        }.collect { position ->
+            position?.let { (index, identity) -> returnPosition.update(index, identity) }
+        }
     }
     val canDismissVertically = verticalSwipeCloseEnabled && !isZoomed
     ApplyCompatViewerSystemBars(hidden = !chromeVisible)

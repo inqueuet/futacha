@@ -26,11 +26,14 @@ internal fun ftutterLoadHighResolution(policy: Int, wifi: Boolean): Boolean = po
 internal data class FtutterThumbnailSources(val primary: String?, val fallback: String?)
 
 internal fun ftutterThumbnailSources(
-    thumbnailUrl: String?, fullImageUrl: String?, quality: Int, wifi: Boolean, catalog: Boolean = false
+    thumbnailUrl: String?, fullImageUrl: String?, quality: Int, wifi: Boolean, catalog: Boolean = false,
+    rewriteThumbnailPath: Boolean = true
 ): FtutterThumbnailSources {
     val high = ftutterLoadHighResolution(quality, wifi)
     val thumbnail = thumbnailUrl?.takeUnless(::isCompatVideoMediaUrl)
-    val catalogThumb = thumbnail?.let { if (high) it.replace("/cat/", "/thumb/") else it.replace("/thumb/", "/cat/") }
+    val catalogThumb = if (rewriteThumbnailPath) {
+        thumbnail?.let { if (high) it.replace("/cat/", "/thumb/") else it.replace("/thumb/", "/cat/") }
+    } else thumbnail
     val full = if (catalog) catalogThumb.takeIf { high }
         else fullImageUrl?.takeIf { it.isNotBlank() && high && !isCompatVideoMediaUrl(it) }
     return FtutterThumbnailSources(
@@ -44,10 +47,11 @@ internal fun ftutterThumbnailSources(
 internal fun FtutterThumbnail(
     thumbnailUrl: String?, fullImageUrl: String?, targetSizePx: Int, contentDescription: String,
     modifier: Modifier = Modifier, fallbackTint: Color = Color.Gray, quality: Int = 0, catalog: Boolean = false,
-    contentScale: androidx.compose.ui.layout.ContentScale? = null
+    contentScale: androidx.compose.ui.layout.ContentScale? = null,
+    rewriteThumbnailPath: Boolean = true
 ) {
     val wifi = isCompatWifiConnected(LocalPlatformContext.current)
-    val sources = ftutterThumbnailSources(thumbnailUrl, fullImageUrl, quality, wifi, catalog)
+    val sources = ftutterThumbnailSources(thumbnailUrl, fullImageUrl, quality, wifi, catalog, rewriteThumbnailPath)
     CompositionLocalProvider(LocalHighQualityThumbnailMode provides HighQualityThumbnailMode.OFF) {
         CatalogPreviewImage(sources.primary, sources.fallback,
             targetSizePx, contentDescription, modifier, fallbackTint,

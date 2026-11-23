@@ -595,7 +595,8 @@ private class FutabaExtensionFallbackInterceptor : Interceptor {
             // failed derived thumbnail must not fan out into every supported
             // extension (and the old builder also produced /up2//src/ URLs).
             if (suppressFutabaExtensionFallbackForUrl(url)) return initialResult
-            if (url.contains("/src/") && policy.maxAttempts > 0) {
+            val host = runCatching { io.ktor.http.Url(url).host.lowercase() }.getOrNull()
+            if (host?.endsWith(".2chan.net") == true && url.contains("/src/") && policy.maxAttempts > 0) {
                 if (isExhausted(url, policy)) {
                     return initialResult
                 }

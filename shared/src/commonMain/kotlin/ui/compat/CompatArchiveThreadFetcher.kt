@@ -113,18 +113,15 @@ internal suspend fun fetchCompatArchiveThreadPage(
 
         val parserBaseUrl = currentUrl.substringBeforeLast('/').trimEnd('/')
         val parserBody = withContext(AppDispatchers.parsing) {
-            if (Url(currentUrl).host in setOf("dev2.ftbucket.info", "kako.futakuro.com")) {
-                // The archived page keeps the original Futaba canonical link, but
-                // its relative img/thumb files live beside the FTBucket capture.
-                // Remove that canonical override so media stays in the archive.
-                archiveResponse.body.replace(
-                    Regex("""(?is)<link\b[^>]{0,1000}\brel\s*=\s*['\"]canonical['\"][^>]{0,1000}>"""),
-                    ""
-                )
-            } else if (Url(currentUrl).host == "futabaforest.net") {
-                normalizeForestThreadHtml(archiveResponse.body)
+            // Every archive page may keep the original Futaba canonical link, but its
+            // relative img/thumb files live beside the archive capture (FTBucket, ふたポ,
+            // ふたばフォレスト, inqueuet). Remove that canonical override so media stays
+            // in the archive instead of pointing at the fallen original (may 1449174385).
+            val withoutCanonical = stripCompatArchiveCanonicalLink(archiveResponse.body)
+            if (Url(currentUrl).host == "futabaforest.net") {
+                normalizeForestThreadHtml(withoutCanonical)
             } else {
-                archiveResponse.body
+                withoutCanonical
             }
         }
         val page = withContext(AppDispatchers.parsing) {
@@ -136,6 +133,29 @@ internal suspend fun fetchCompatArchiveThreadPage(
         return page
     }
     error("アーカイブ本文のリンクを解決できませんでした")
+}
+
+private val compatArchiveCanonicalLinkRegex =
+    Regex("""(?is)<link\b[^>]{0,1000}\brel\s*=\s*['\"]canonical['\"][^>]{0,1000}>""")
+
+/** Removes the canonical link so relative media resolves against the archive page. */
+internal fun stripCompatArchiveCanonicalLink(html: String): String =
+    html.replace(compatArchiveCanonicalLinkRegex, "")
+
+private fun Post.fillMissingMediaFrom(other: Post): Post {
+    // A post the live board marks deleted lost its picture on purpose.
+    if (isDeleted) return this
+    if (imageUrl != null || other.imageUrl == null) {
+        return if (imageUrl != null && thumbnailUrl == null && other.thumbnailUrl != null &&
+            other.imageUrl == imageUrl) copy(thumbnailUrl = other.thumbnailUrl) else this
+    }
+    return copy(
+        imageUrl = other.imageUrl,
+        thumbnailUrl = thumbnailUrl ?: other.thumbnailUrl,
+        thumbnailWidth = thumbnailWidth ?: other.thumbnailWidth,
+        thumbnailHeight = thumbnailHeight ?: other.thumbnailHeight,
+        imageFileSizeBytes = imageFileSizeBytes ?: other.imageFileSizeBytes
+    )
 }
 
 /**
@@ -154,7 +174,12 @@ internal fun mergeCompatThreadPages(
     supplements.asSequence().flatMap { it.posts.asSequence() }.forEach { post ->
         if (!mergedById.containsKey(post.id)) mergedById[post.id] = post
     }
-    primary.posts.forEach { post -> mergedById[post.id] = post }
+    primary.posts.forEach { post ->
+        // The primary copy wins, but a local copy saved without its picture (thumbnail
+        // failed, offline save) takes the archive's picture instead of losing it.
+        val supplement = mergedById[post.id]
+        mergedById[post.id] = if (supplement != null) post.fillMissingMediaFrom(supplement) else post
+    }
 
     val mergedPosts = mergedById.values.sortedWith(
         compareBy<Post> { it.order ?: Int.MAX_VALUE }

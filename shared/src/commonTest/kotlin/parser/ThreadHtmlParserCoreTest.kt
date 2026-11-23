@@ -921,6 +921,18 @@ class ThreadHtmlParserCoreTest {
             page.posts.single().messageHtml
         )
     }
+    @Test
+    fun futabasSoonToFallNoticeReplacesTheTime() = kotlinx.coroutines.test.runTest {
+        val soon = sampleThreadHtml.replace(
+            "<blockquote>本文<br>2行目</blockquote>",
+            "<blockquote>本文<br>2行目</blockquote><font color=\"#f00000\"><b>このスレは古いので、もうすぐ消えます。</b></font><br>"
+        )
+        assertEquals("もうすぐ消えます", ThreadHtmlParserCore.parseThread(soon).expiresAtLabel)
+        assertEquals("1月18日頃消えます", ThreadHtmlParserCore.parseThread(sampleThreadHtml).expiresAtLabel)
+        // A post can only write the words as text, never the red bold.
+        val written = sampleThreadHtml.replace("返信1", "このスレは古いので、もうすぐ消えます。")
+        assertEquals("1月18日頃消えます", ThreadHtmlParserCore.parseThread(written).expiresAtLabel)
+    }
 }
 
 private val sampleThreadHtml = """

@@ -351,6 +351,26 @@ internal fun getThreadSaveExtensionFromContentType(contentType: ContentType?): S
     }
 }
 
+internal fun resolveNewsSavedMediaExtension(url: String, contentType: ContentType?): String? {
+    val suffix = com.valoser.futacha.shared.media.mediaFileExtension(url)
+    if (contentType == null || contentType.match(ContentType.Application.OctetStream)) {
+        return suffix.takeIf(::isThreadSaveSupportedExtension)
+    }
+    val mimeType = contentType.contentType.lowercase()
+    val subtype = contentType.contentSubtype.lowercase()
+    val extension = when (subtype) {
+        "jpeg", "pjpeg" -> "jpg"
+        "x-png" -> "png"
+        "quicktime" -> "mov"
+        "x-ms-bmp" -> "bmp"
+        else -> subtype
+    }
+    return extension.takeIf {
+        (mimeType == "image" && it in SUPPORTED_IMAGE_EXTENSIONS) ||
+            (mimeType == "video" && it in SUPPORTED_VIDEO_EXTENSIONS)
+    }
+}
+
 internal fun isThreadSaveSupportedExtension(extension: String): Boolean {
     val normalized = extension.lowercase()
     return normalized in SUPPORTED_IMAGE_EXTENSIONS || normalized in SUPPORTED_VIDEO_EXTENSIONS

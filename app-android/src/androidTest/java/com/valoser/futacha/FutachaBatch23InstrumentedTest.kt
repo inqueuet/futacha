@@ -318,6 +318,24 @@ class FutachaBatch23InstrumentedTest {
      * A tab closed elsewhere (the thread's close) is offered by the host's snackbar, and the tab list offers the same
      * pending batch. Restored from the list, the snackbar's offer goes away and the batch is not restored a second time.
      */
+    @Test fun aLongPressOnATabRowOpensTheSameTidyDialogAsTheButton() {
+        // may 1449250038: the 整理 button was not found; a long press on the row opens the same dialog.
+        runBlocking {
+            store.upsertBoard(CompatBoard(compatBoardKey(boardUrl), "may", boardUrl, boardUrl, 0))
+            listOf(tab("1"), tab("2")).forEach { store.openTab(it) }
+        }
+        var opened = 0
+        host(FakeBoardRepository()) {
+            FutachaTabsDialog(requireNotNull(LocalFutachaSharedFeatures.current), null, { opened++ }, {})
+        }
+        rule.waitUntil(10_000) { rule.onAllNodesWithText("タブ1").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("タブ1").performTouchInput { longClick() }
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("これより下を閉じる").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("落ちたスレを閉じる").assertExists()
+        assertEquals(0, opened)
+        rule.onAllNodesWithText("整理").onFirst().assertExists()
+    }
+
     @Test fun aBatchOfferedByTheSnackbarAndTheListIsRestoredOnce() {
         runBlocking {
             store.upsertBoard(CompatBoard(compatBoardKey(boardUrl), "may", boardUrl, boardUrl, 0))

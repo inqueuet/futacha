@@ -35,11 +35,20 @@ internal class VoicevoxSpeechEngine(
     private val prepareLock = Mutex()
     // Resources are only read/changed under execution, on the native dispatcher.
     private var resources: Resources? = null
+    // may 1449255847: the post after this one (hintNext), and its first sentence made while this post plays. One ahead
+    // only; a stop, a skip or new settings give it a different key, so it is never spoken for another text.
+    private data class PrefetchKey(val chunk: String, val rate: Float, val pitch: Float, val generation: Long)
+    private val nextHint = MutableStateFlow<String?>(null)
+    // Only read/changed under execution.
+    private var prefetched: Pair<PrefetchKey, ByteArray?>? = null
     private val cleanup = CoroutineScope(SupervisorJob() + voiceNativeDispatcher + CoroutineExceptionHandler { _, failure ->
         Logger.e("VoicevoxSpeechEngine", "音声エンジンの解放に失敗しました", failure)
     })
 
     override fun configure(settings: SpeechSettings) { this.settings.value = settings }
+    override fun hintNext(text: String?) { nextHint.value = text }
+    private fun prefetchKeyOf(chunk: String, configuration: SpeechSettings, run: Long) =
+        PrefetchKey(chunk, configuration.rate, configuration.voicevoxPitch, run)
     override suspend fun availableVoices(): List<SpeechVoice> = emptyList()
     override suspend fun prepare() = prepareLock.withLock {
         check(!closed.value && runtime.platform.available) { runtime.platform.unavailableReason }
@@ -104,16 +113,37 @@ internal class VoicevoxSpeechEngine(
                             // may 1447418590: the next chunk is made while this one plays, so the voice does not
                             // stop for the whole synthesis time between sentences and posts.
                             val chunks = voicevoxTextChunks(text).filter(::voicevoxHasSpokenText)
-                            var next: Deferred<ByteArray?>? = chunks.firstOrNull()?.let { first -> async { synthesizeChunk(first) } }
+                            val ready = prefetched?.takeIf { (key, _) ->
+                                key == chunks.firstOrNull()?.let { prefetchKeyOf(it, configuration, run) }
+                            }
+                            prefetched = null
+                            var next: Deferred<ByteArray?>? = chunks.firstOrNull()?.let { first ->
+                                if (ready != null) CompletableDeferred(ready.second) else async { synthesizeChunk(first) }
+                            }
+                            // The following post's first sentence, started once this post's last one is made.
+                            var ahead: Pair<PrefetchKey, Deferred<ByteArray?>>? = null
                             for (index in chunks.indices) {
                                 ensureActive()
                                 val wav = requireNotNull(next).await()
                                 next = chunks.getOrNull(index + 1)?.let { following -> async { synthesizeChunk(following) } }
+                                if (next == null && ahead == null) {
+                                    ahead = nextHint.exchange(null)?.let(::voicevoxFirstSpokenChunk)?.let { chunk ->
+                                        prefetchKeyOf(chunk, configuration, run) to async {
+                                            // A failure of the made-ahead sentence is left to the next post, which makes it again.
+                                            try { synthesizeChunk(chunk) } catch (cancelled: CancellationException) { throw cancelled }
+                                            catch (failure: Exception) {
+                                                Logger.w("VoicevoxSpeechEngine", "次のレスの先読みに失敗しました: ${failure.message}")
+                                                null
+                                            }
+                                        }
+                                    }
+                                }
                                 ensureActive() // A stopped call never emits its late result.
                                 if (wav == null) continue
                                 require(wav.size in 44..16 * 1024 * 1024) { "音声データの長さが不正です" }
                                 output.play(wav)
                             }
+                            ahead?.let { (key, made) -> made.await()?.let { prefetched = key to it } }
                             }
                             completed = true
                         } finally {
@@ -130,6 +160,7 @@ internal class VoicevoxSpeechEngine(
 
     /** Skip/seek cancels the current utterance while keeping the verified model. */
     override fun interrupt() {
+        nextHint.value = null
         active.exchange(null)?.let { call ->
             call.retainModel.value = true
             call.job.cancel(CancellationException("読み上げ位置を変更しました"))
@@ -138,6 +169,7 @@ internal class VoicevoxSpeechEngine(
     }
 
     override fun stop() {
+        nextHint.value = null
         val stopped = generation.updateAndGet { it + 1 }
         active.exchange(null)?.job?.cancel(CancellationException("読み上げを停止しました"))
         player.value?.stop()
@@ -176,6 +208,10 @@ internal class VoicevoxSpeechEngine(
         runtime.remove(this)
     }
 }
+
+/** The first sentence of [text] that is spoken; what is made ahead for the next post. */
+internal fun voicevoxFirstSpokenChunk(text: String): String? =
+    voicevoxTextChunks(text).firstOrNull(::voicevoxHasSpokenText)
 
 internal fun voicevoxTextChunks(text: String, maximum: Int = 128): List<String> {
     require(maximum > 1)

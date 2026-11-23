@@ -188,8 +188,8 @@ class FtutterModeInstrumentedTest {
         waitForTag("ftutter-settings")
         saveShot("02-settings")
         // モードの切り替えは設定の一番下。
-        rule.onNodeWithTag("ftutter-settings-list").performScrollToNode(androidx.compose.ui.test.hasText("モード"))
-        assertTrue(rule.onAllNodesWithText("モード").fetchSemanticsNodes().isNotEmpty())
+        rule.onNodeWithTag("ftutter-settings-list").performScrollToNode(androidx.compose.ui.test.hasText("モードの切り替え"))
+        assertTrue(rule.onAllNodesWithText("モードの切り替え").fetchSemanticsNodes().isNotEmpty())
         rule.onNodeWithTag("ftutter-back").performClick()
         waitForTag("ftutter-board-list")
     }
@@ -197,8 +197,8 @@ class FtutterModeInstrumentedTest {
     @Test fun settingsModeRowStaysAboveTheNavigationBarAndCanBeTapped() {
         openSettingsRoot()
         val list = rule.onNodeWithTag("ftutter-settings-list")
-        list.performScrollToNode(androidx.compose.ui.test.hasTestTag("settings-section-モード"))
-        val section = rule.onNodeWithTag("settings-section-モード")
+        list.performScrollToNode(androidx.compose.ui.test.hasTestTag("settings-section-モードの切り替え"))
+        val section = rule.onNodeWithTag("settings-section-モードの切り替え")
         val navigationBottom = androidx.core.view.ViewCompat.getRootWindowInsets(rule.activity.window.decorView)
             ?.getInsets(androidx.core.view.WindowInsetsCompat.Type.navigationBars())?.bottom ?: 0
         val safeBottom = rule.onRoot().fetchSemanticsNode().boundsInRoot.bottom - navigationBottom

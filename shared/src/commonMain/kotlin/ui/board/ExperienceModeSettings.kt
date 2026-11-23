@@ -28,7 +28,7 @@ internal fun GlobalSettingsModeSection() {
     var requestedProfile by remember { mutableStateOf<ExperienceProfile?>(null) }
 
     SettingsSection(
-        title = "モード",
+        title = "モードの切り替え",
         icon = Icons.Rounded.SwapHoriz,
         description = "現在: ${controller.activeProfile.displayName}",
         initiallyExpanded = false

@@ -23,6 +23,8 @@ internal fun CompatSpeechSettingsScreen(
     store: CompatibilityStore,
     preferences: Map<String, String>,
     onBack: () -> Unit,
+    /** Shown from ふたちゃ's settings: its own 「引用文も読み上げる」 and 「引用文を低い声で読む」 (may 1449267646). */
+    futachaQuoteOptions: Boolean = false,
     createSpeaker: (Any?, com.valoser.futacha.shared.audio.SpeechRuntime?) -> com.valoser.futacha.shared.audio.TextSpeaker =
         { context, runtime -> createTextSpeaker(context, runtime) }
 ) {
@@ -93,6 +95,22 @@ internal fun CompatSpeechSettingsScreen(
             SpeechSettingSlider("速さ", "speech-rate", settings.rate) { save(SPEECH_RATE_KEY, it.toString()) }
             if (settings.engine == SpeechEngineKind.VOICEVOX_ZUNDAMON) VoicePitchSlider(settings.voicevoxPitch) { save(SPEECH_VOICEVOX_PITCH_KEY, it.toString()) }
             else if (speaker.supportsPitch) SpeechSettingSlider("声の高さ", "speech-pitch", settings.pitch) { save(SPEECH_PITCH_KEY, it.toString()) }
+            if (futachaQuoteOptions) {
+                val readQuotes = com.valoser.futacha.shared.ui.board.futachaReadsQuotes(preferences)
+                Text("ふたちゃの引用文", style = MaterialTheme.typography.titleMedium)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Text("引用文（＞の行）も読み上げる", Modifier.weight(1f))
+                    Switch(readQuotes, { save(com.valoser.futacha.shared.ui.board.FUTACHA_SPEECH_READ_QUOTES_KEY, if (it) "ON" else "OFF") },
+                        Modifier.testTag("futacha-speech-read-quotes"))
+                }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Text("引用文を低い声で読む", Modifier.weight(1f))
+                    Switch(com.valoser.futacha.shared.ui.board.futachaQuoteLowVoice(preferences),
+                        { save(com.valoser.futacha.shared.ui.board.FUTACHA_SPEECH_QUOTE_LOW_VOICE_KEY, if (it) "ON" else "OFF") },
+                        Modifier.testTag("futacha-speech-quote-low-voice"), enabled = readQuotes)
+                }
+                Text("オフのときは、これまでどおり引用文を読みません。", style = MaterialTheme.typography.bodySmall)
+            }
             if (samplePlaying) TextButton(onClick = { sampleJob?.cancel(); speaker.stop(); samplePlaying = false }) { Text("試聴を停止") }
             else TextButton(enabled = !loading || settings.engine == SpeechEngineKind.VOICEVOX_ZUNDAMON, onClick = {
                 samplePlaying = true; sampleCompleted = false; error = null

@@ -147,7 +147,7 @@ class MainActivitySmokeTest {
         // The action bar also contributes a "設定" semantics node. The dropdown popup is
         // composed after it and is therefore the second node while the menu is open.
         rule.onAllNodesWithText("設定")[1].assertIsDisplayed().performClick()
-        rule.onNodeWithText("モード").assertIsDisplayed()
+        rule.onNodeWithText("モードの切り替え").assertIsDisplayed()
     }
 
     @Test

@@ -78,6 +78,7 @@ internal fun rememberThreadScreenDerivedRuntimeState(
     readAloudStatus: ReadAloudStatus,
     shouldPrepareReadAloudForCommand: Boolean = false,
     lazyListState: LazyListState,
+    isOfflineCopy: Boolean = false,
     isSearchActive: Boolean,
     searchQuery: String,
     searchPosts: List<Post>? = null,
@@ -93,7 +94,8 @@ internal fun rememberThreadScreenDerivedRuntimeState(
         threadTitle,
         isReadAloudControlsVisible,
         readAloudStatus,
-        shouldPrepareReadAloudForCommand
+        shouldPrepareReadAloudForCommand,
+        isOfflineCopy
     ) {
         buildThreadScreenDerivedUiState(
             currentState = currentState,
@@ -101,7 +103,8 @@ internal fun rememberThreadScreenDerivedRuntimeState(
             threadTitle = threadTitle,
             isReadAloudControlsVisible = isReadAloudControlsVisible,
             readAloudStatus = readAloudStatus,
-            shouldPrepareReadAloudForCommand = shouldPrepareReadAloudForCommand
+            shouldPrepareReadAloudForCommand = shouldPrepareReadAloudForCommand,
+            isOfflineCopy = isOfflineCopy
         )
     }
     val currentPage = derivedUiState.currentPage
@@ -139,7 +142,8 @@ internal fun rememberThreadScreenDerivedRuntimeState(
     val readAloudPosts = reportedLayout?.posts ?: currentPosts
     val readAloudItemsBeforePosts = reportedLayout?.itemsBeforePosts ?: 0
     val readAloudSkippedPostIds = reportedLayout?.collapsedPostIds.orEmpty()
-    val preparation = remember(readAloudPosts, derivedUiState.shouldPrepareReadAloudSegments, readAloudSkippedPostIds) { Any() }
+    val readQuotes = futachaReadsQuotes(LocalFutachaSharedFeatures.current?.preferences.orEmpty())
+    val preparation = remember(readAloudPosts, derivedUiState.shouldPrepareReadAloudSegments, readAloudSkippedPostIds, readQuotes) { Any() }
     val preparedSegments by produceState<Pair<Any, List<ReadAloudSegment>>?>(
         initialValue = null,
         key1 = preparation
@@ -149,7 +153,7 @@ internal fun rememberThreadScreenDerivedRuntimeState(
             return@produceState
         }
         value = preparation to withContext(AppDispatchers.parsing) {
-            buildReadAloudSegments(readAloudPosts, postTextCache, readAloudSkippedPostIds)
+            buildReadAloudSegments(readAloudPosts, postTextCache, readAloudSkippedPostIds, includeQuotes = readQuotes)
         }
     }
     val currentPreparedSegments = preparedSegments?.takeIf { it.first === preparation }

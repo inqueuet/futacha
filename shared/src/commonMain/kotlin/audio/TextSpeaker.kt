@@ -30,6 +30,8 @@ internal interface SpeechBackend {
     fun configure(settings: SpeechSettings)
     suspend fun prepare()
     suspend fun speak(text: String)
+    /** The text that will be spoken after the current one; an engine may make its start ahead. The OS voice ignores it. */
+    fun hintNext(text: String?) {}
     fun interrupt() { stop() }
     fun stop()
     fun close()
@@ -90,6 +92,10 @@ class TextSpeaker internal constructor(
             fallback.prepare()
             fallback.speak(text)
         }
+    }
+    /** may 1449255847: the next post, so ずんだもん can make its first sentence while this one is spoken. */
+    fun hintNext(text: String?) {
+        if (configuration.value.engine == SpeechEngineKind.VOICEVOX_ZUNDAMON && voice.isInitialized()) voice.value.hintNext(text)
     }
     internal fun interrupt() {
         if (system.isInitialized()) system.value.interrupt()

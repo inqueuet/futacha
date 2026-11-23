@@ -62,7 +62,8 @@ internal data class ThreadSaveMediaDownloadRequest(
     val readIdleTimeoutMillis: Long,
     val writeTimeoutMillis: Long,
     val nowMillis: () -> Long = { Clock.System.now().toEpochMilliseconds() },
-    val withMediaWriteLock: suspend (String, suspend () -> Long) -> Long
+    val withMediaWriteLock: suspend (String, suspend () -> Long) -> Long,
+    val useResponseMediaType: Boolean = false
 )
 
 internal data class ThreadSaveResponseStreamRequest(
@@ -230,12 +231,12 @@ internal suspend fun downloadAndStoreThreadSaveMedia(
                     )
                 }
 
-                val extension = (
-                    getThreadSaveExtensionFromUrl(request.url)
-                        ?: getThreadSaveExtensionFromContentType(
-                            source.contentType
-                        )
-                    ).lowercase()
+                val extension = if (request.useResponseMediaType) {
+                    resolveNewsSavedMediaExtension(request.url, source.contentType).orEmpty()
+                } else {
+                    (getThreadSaveExtensionFromUrl(request.url)
+                        ?: getThreadSaveExtensionFromContentType(source.contentType)).lowercase()
+                }
                 if (!isThreadSaveSupportedExtension(extension)) {
                     throw ThreadSaveMediaDownloadFailure(
                         message = "Unsupported file type: $extension",
@@ -248,7 +249,8 @@ internal suspend fun downloadAndStoreThreadSaveMedia(
                     url = request.url,
                     extension = extension,
                     postId = request.postId,
-                    timestampMillis = request.nowMillis()
+                    timestampMillis = request.nowMillis(),
+                    replaceExtension = request.useResponseMediaType
                 )
                 val relativePath = buildThreadSaveRelativePath(request.boardPath, fileType, fileName)
 
@@ -305,7 +307,8 @@ internal suspend fun downloadAndStoreThreadSaveMedia(
             "Failed to download (${describeUrlForLog(request.url)}), type=${describeFailureForLog(t)}"
         )
         Result.failure(if (t is OriginalMediaSaveFailure) {
-            ThreadSaveMediaDownloadFailure(t.message ?: "Original media save failed", retryable = false, cause = t)
+            ThreadSaveMediaDownloadFailure(t.message ?: "Original media save failed", retryable = false, cause = t,
+                httpStatus = threadSaveHttpStatusInCauses(t))
         } else t)
     }
 }
@@ -348,4 +351,17 @@ private suspend fun <T> withThreadSaveMediaSource(
     } catch (timeout: io.ktor.client.plugins.HttpRequestTimeoutException) {
         throw IllegalStateException("Download request timed out after ${request.mediaRequestTimeoutMillis}ms", timeout)
     }
+}
+
+/** The HTTP status behind a shared original-media failure (its downloader throws coil's HttpException), if any. */
+internal fun threadSaveHttpStatusInCauses(error: Throwable): Int? {
+    var current: Throwable? = error
+    var depth = 0
+    while (current != null && depth < 8) {
+        if (current is coil3.network.HttpException) return current.response.code
+        if (current is ThreadSaveMediaDownloadFailure && current.httpStatus != null) return current.httpStatus
+        current = current.cause
+        depth += 1
+    }
+    return null
 }

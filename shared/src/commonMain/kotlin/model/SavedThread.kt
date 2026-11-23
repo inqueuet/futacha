@@ -2,6 +2,7 @@
 
 package com.valoser.futacha.shared.model
 
+import com.valoser.futacha.shared.compat.isAimogeNewsBoard
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
@@ -88,6 +89,15 @@ data class SavedPost(
     @EncodeDefault(EncodeDefault.Mode.NEVER)
     val extraAttachments: List<SavedAttachment> = emptyList()
 )
+
+internal fun SavedPost.localHistoryThumbnailPath(boardUrl: String): String? =
+    localThumbnailPath?.takeIf { it.isNotBlank() } ?: localNewsPreviewOriginalPath(boardUrl)
+
+internal fun SavedPost.localNewsPreviewOriginalPath(boardUrl: String): String? =
+    localImagePath?.takeIf {
+        it.isNotBlank() && isAimogeNewsBoard(boardUrl) &&
+            originalImageUrl != null && originalImageUrl == originalThumbnailUrl
+    }
 
 /** One extra saved file of an あいもげ post. */
 @Serializable

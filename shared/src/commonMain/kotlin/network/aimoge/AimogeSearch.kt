@@ -10,6 +10,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 
 /*
  * あいもげの検索（読むだけ）。ふたばの過去ログ検索（inqueuet・ふたポ・フォレスト）には、あいもげの板を渡さない。
@@ -31,6 +32,7 @@ private data class AimogeArchiveThreadDto(
     val threadId: String? = null,
     val opExcerpt: String? = null,
     val thumbnailUrl: String? = null,
+    val news: JsonElement? = null,
     val replyCount: Int? = null,
     val archivedAt: String? = null
 )
@@ -47,7 +49,7 @@ internal fun parseAimogeArchiveSearch(body: String, slug: String): List<ArchiveS
             // The first line of the OP, as the catalog shows it.
             title = dto.opExcerpt?.lineSequence()?.map(String::trim)?.firstOrNull(String::isNotEmpty),
             htmlUrl = "${boardUrl}thread/$id",
-            thumbUrl = dto.thumbnailUrl?.takeIf { it.startsWith("https://") },
+            thumbUrl = dto.thumbnailUrl?.takeIf { it.startsWith("https://") } ?: aimogeNewsPreviewUrl(slug, dto.news),
             replyCount = dto.replyCount?.coerceAtLeast(0) ?: 0,
             status = "archived",
             finalizedAt = dto.archivedAt?.let { runCatching { kotlin.time.Instant.parse(it).toEpochMilliseconds() }.getOrNull() }
@@ -69,8 +71,12 @@ private data class AimogeSearchPostDto(
     val seq: Int? = null,
     val status: String? = null,
     val body: String? = null,
-    val attachment: AimogeSearchAttachmentDto? = null
-)
+    val attachment: AimogeSearchAttachmentDto? = null,
+    val news: JsonElement? = null
+) {
+    fun previewUrl(slug: String): String? =
+        attachment?.thumbnailUrl?.takeIf { it.startsWith("https://") } ?: aimogeNewsPreviewUrl(slug, news)
+}
 
 /**
  * The live threads of [slug] that have a post holding the words (`/search?scope=all`, at most 100 posts, no paging),
@@ -96,7 +102,7 @@ internal fun parseAimogePostSearch(body: String, slug: String): List<ArchiveSear
             board = slug,
             title = if (op != null || first.seq == null) line else "No.${first.seq}：$line",
             htmlUrl = "${boardUrl}thread/$id",
-            thumbUrl = (op?.attachment ?: first.attachment)?.thumbnailUrl?.takeIf { it.startsWith("https://") },
+            thumbUrl = first.previewUrl(slug),
             status = "live"
         )
     }
@@ -110,7 +116,7 @@ internal fun parseAimogePostSearchRows(body: String, slug: String): List<AimogeP
         if (post.status != null && post.status != "public") return@mapNotNull null
         val id = post.threadId?.trim()?.lowercase()?.takeIf { it.matches(AIMOGE_UUID_REGEX) } ?: return@mapNotNull null
         AimogePostSearchRow(id, "https://nijiurachan.net/b/$slug/thread/$id", post.seq, post.body.orEmpty().take(4000),
-            post.attachment?.thumbnailUrl?.takeIf { it.startsWith("https://") })
+            post.previewUrl(slug))
     }
 
 /** `/search?q=&scope=all` (read only, at most 100 posts) with a client made for this search only. */

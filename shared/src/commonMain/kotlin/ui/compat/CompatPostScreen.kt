@@ -46,6 +46,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -1227,11 +1228,16 @@ internal fun CompatPostScreen(
             }
         ) { padding ->
         Column(
+            // The bottom bar is drawn over the form above the keyboard. Shrink the
+            // scroll viewport by the keyboard and the bar so the comment's caret is
+            // brought above the bar, not under it (it hid from line 18).
             modifier = Modifier.fillMaxSize()
                 .padding(padding)
+                .consumeWindowInsets(padding)
+                .imePadding()
+                .padding(bottom = 40.dp)
                 .verticalScroll(formScrollState)
                 .padding(horizontal = 10.dp, vertical = 0.dp)
-                .padding(bottom = 40.dp)
         ) {
             com.valoser.futacha.shared.ui.board.IncomingSharedAttachmentButton(enabled = !sending, onAttach = ::acceptAttachment)
             // Keep the compact reference app spacing while retaining enough vertical
@@ -1353,7 +1359,6 @@ internal fun CompatPostScreen(
                 modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("compat-post-delete-key"),
                 colors = postTextFieldColors
             )
-            Spacer(Modifier.imePadding())
         }
         }
         Column(

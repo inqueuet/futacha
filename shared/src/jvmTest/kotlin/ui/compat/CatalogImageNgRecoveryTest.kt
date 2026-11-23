@@ -176,6 +176,25 @@ class CatalogImageNgRecoveryTest {
         }
     }
 
+    @Test fun aRegisteredCatalogPictureIsCachedUnderItsCatalogKeyBeforeTheRuleSoItsCellHidesAtOnce() = runBlocking {
+        val calls = mutableListOf<String>()
+        val saved = linkedMapOf<String, String>()
+        val store = Proxy.newProxyInstance(CompatibilityStore::class.java.classLoader,
+            arrayOf(CompatibilityStore::class.java)) { _, method, args ->
+            calls += method.name
+            when (method.name) {
+                "saveImagePhashes" -> { @Suppress("UNCHECKED_CAST") saved.putAll(args[0] as Map<String, String>); Unit }
+                "upsertNgRule" -> true
+                else -> error(method.name)
+            }
+        } as CompatibilityStore
+        val url = "https://example.invalid/b/src/9.jpg"
+        registerFutachaImageNgRule(store, CompatImageNgSource.CATALOG, "board", url, "", false,
+            fetchHash = { "0123456789abcdef" })
+        assertEquals(listOf("saveImagePhashes", "upsertNgRule"), calls.filter { it == "saveImagePhashes" || it == "upsertNgRule" })
+        assertEquals(mapOf(compatImagePhashCachePreferenceKey(url) to "0123456789abcdef"), saved)
+    }
+
     @Test fun normalImagesAndServerFailuresNeverTriggerOriginalResolution() = runBlocking {
         var resolutions = 0
         val prefix = "https://example.invalid/catalog-errors-${System.nanoTime()}"

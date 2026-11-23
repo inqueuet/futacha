@@ -305,6 +305,7 @@ private fun ThreadScreenContent(
     val lastUsedDeleteKey = persistentBindings.lastUsedDeleteKey
     val updateLastUsedDeleteKey = persistentBindings.updateLastUsedDeleteKey
     val textSpeaker = runtimeHandles.textSpeaker
+    val speechPreferences = androidx.compose.runtime.rememberUpdatedState(LocalFutachaSharedFeatures.current?.preferences.orEmpty())
     var readAloudJob by readAloudStateRefs.job
     var readAloudStatus by readAloudStateRefs.status
     var sheetOverlayState by readAloudStateRefs.sheetOverlayState
@@ -512,7 +513,12 @@ private fun ThreadScreenContent(
                 lazyListState.animateScrollToItem(displayedPostsLayout.itemsBeforePosts.coerceAtLeast(0) + postIndex)
             }
         },
-        speakText = textSpeaker::speak,
+        speakText = { text ->
+            val prefs = speechPreferences.value
+            val base = com.valoser.futacha.shared.audio.speechSettingsFromPreferences(prefs)
+            speakWithQuoteVoice(textSpeaker, text, base, if (futachaQuoteLowVoice(prefs)) quoteVoiceSettings(base) else null)
+        },
+        hintNextText = { textSpeaker.hintNext(readAloudHintText(it)) },
         cancelActiveReadAloud = cancelActiveReadAloud,
         interruptActiveReadAloud = { interruptThreadReadAloud(readAloudStateBindings, textSpeaker::interrupt) }
     )
@@ -744,6 +750,7 @@ private fun ThreadScreenContent(
         ReadAloudStatus.Idle,
         shouldPrepareReadAloudForCommand = shouldPrepareReadAloudForAiCommand || isReadAloudActive,
         lazyListState,
+        isOfflineCopy = isShowingOfflineCopy,
         isSearchActive,
         debouncedThreadSearchQuery,
         searchPosts = displayedPostsLayout.posts.takeIf { it.isNotEmpty() },

@@ -57,7 +57,12 @@ class CompatDrawerBackOrderInstrumentedTest {
 
     private fun searchShown() = rule.onAllNodes(hasSetTextAction()).fetchSemanticsNodes().isNotEmpty()
 
-    @Test fun theDrawerOverAThreadLeadsBackToTheCatalog() {
+    @Test fun theDrawerOverAThreadLeadsBackToTheCatalog() = checkDrawerReturn(atBottom = false)
+
+    @Test fun theDrawerReturnButtonCanSitImmediatelyAboveTheToolbar() = checkDrawerReturn(atBottom = true)
+
+    private fun checkDrawerReturn(atBottom: Boolean) {
+        if (atBottom) runBlocking { storage.savePreference(COMPAT_DRAWER_RETURN_AT_BOTTOM_KEY, "ON") }
         rule.setContent { MaterialTheme { CompatibilityApp(store = storage, repository = repo, onExitApplication = {}) } }
         rule.onNodeWithText(boardUrl).performClick()
         rule.waitUntil(15_000) { rule.onAllNodesWithTag("compat-catalog-item-463", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
@@ -67,7 +72,16 @@ class CompatDrawerBackOrderInstrumentedTest {
         rule.waitUntil(5_000) { drawerShown() }
         rule.waitUntil(5_000) { rule.onAllNodesWithTag("compat-drawer-leave-thread").fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithText("← カタログに戻る").assertExists()
-        rule.onNodeWithTag("compat-drawer-leave-thread").performClick()
+        val button = rule.onNodeWithTag("compat-drawer-leave-thread")
+        val toolbar = rule.onNodeWithContentDescription("開いているタブ")
+        val buttonBounds = button.fetchSemanticsNode().boundsInRoot
+        val toolbarBounds = toolbar.fetchSemanticsNode().boundsInRoot
+        if (atBottom) {
+            org.junit.Assert.assertEquals(toolbarBounds.top, buttonBounds.bottom, 12f)
+        } else {
+            org.junit.Assert.assertTrue(toolbarBounds.top - buttonBounds.bottom > 12f)
+        }
+        button.performClick()
         rule.waitUntil(5_000) { rule.onAllNodesWithTag("compat-drawer-leave-thread").fetchSemanticsNodes().isEmpty() }
         rule.waitUntil(5_000) { !drawerShown() }
         rule.waitUntil(5_000) { rule.onAllNodesWithTag("compat-catalog-item-463", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }

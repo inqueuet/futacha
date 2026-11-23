@@ -24,7 +24,8 @@ internal fun compatPostsForSave(
             isDeleted = post.isDeleted,
             isIsolated = post.isIsolated,
             referencedCount = post.referencedCount,
-            mail = post.mail
+            mail = post.mail,
+            attachments = post.attachments.takeIf { includeFullImages || includeThumbnails }.orEmpty()
         )
     }
 

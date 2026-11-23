@@ -53,6 +53,15 @@ class CompatThreadFetchTest {
         assertTrue(shouldFetchCompatThread(manual = false, refreshOnActivation = true, cachedPostCount = 10))
     }
 
+    // may 1449261335: a cache server that does not answer must not keep the thread on the cache message.
+    @Test fun aSilentCacheServerFallsBackToTheLiveBoard() = kotlinx.coroutines.test.runTest {
+        val live = page.copy(posts = emptyList())
+        val result = loadCompatThreadWithFallback(source, true, cache) { url ->
+            if (url != source) kotlinx.coroutines.awaitCancellation() else live
+        }
+        assertEquals(CompatThreadFetchSource.PRIMARY, result.getOrThrow().source)
+    }
+
     @Test
     fun cacheHitDoesNotTouchLiveOrArchive() = runBlocking {
         val requests = mutableListOf<String>()

@@ -1,15 +1,20 @@
 package com.valoser.futacha.shared.network.aimoge
 
+import com.valoser.futacha.shared.compat.AIMOGE_NEWS_BOARD_SLUG
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.PostAttachment
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.parser.ThreadHtmlParserCore
+import io.ktor.http.Url
 import kotlinx.datetime.FixedOffsetTimeZone
 import kotlinx.datetime.UtcOffset
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlin.time.Instant
 
 // ---- The parts of the JSON the app reads (unknown keys are ignored). ----
@@ -26,6 +31,23 @@ internal data class AimogeAttachmentDto(
     val isOekaki: Boolean = false
 )
 
+internal fun aimogeNewsPreviewUrl(boardSlug: String, news: JsonElement?): String? {
+    if (boardSlug != AIMOGE_NEWS_BOARD_SLUG) return null
+    val imageUrl = (news as? JsonObject)?.get("imageUrl") as? JsonPrimitive ?: return null
+    if (!imageUrl.isString) return null
+    val candidate = imageUrl.content.trim()
+    val authority = candidate.substringAfter("://", "").takeWhile { it !in "/?#" }
+    if (!candidate.startsWith("https://", ignoreCase = true) || authority.isEmpty() ||
+        candidate.any { it.isWhitespace() || it == '\\' }
+    ) return null
+    return candidate.takeIf {
+        runCatching {
+            val url = Url(candidate)
+            url.host.isNotBlank() && url.user == null && url.password == null
+        }.getOrDefault(false)
+    }
+}
+
 @Serializable
 internal data class AimogePostDto(
     /** Null on a `/state` row for a post that cannot be read now (`{"seq":8,"status":"unavailable"}`). */
@@ -38,6 +60,7 @@ internal data class AimogePostDto(
     val createdAt: String? = null,
     val attachment: AimogeAttachmentDto? = null,
     val attachments: List<AimogeAttachmentDto> = emptyList(),
+    val news: JsonElement? = null,
     val sodaneCount: Int = 0,
     val displayId: String? = null,
     val sage: Boolean = false,
@@ -442,9 +465,10 @@ private fun AimogeAttachmentDto.toModel(): PostAttachment = PostAttachment(
 /** Post statuses are public | shadowed (spec 2026-11-11); only a `/state` row says "unavailable" (no "deleted"). */
 internal fun AimogePostDto.isRemoved(): Boolean = status == "unavailable"
 
-internal fun AimogePostDto.toPost(order: Int): Post {
+internal fun AimogePostDto.toPost(order: Int, boardSlug: String = ""): Post {
     val files = allAttachments()
     val first = files.firstOrNull()
+    val newsPreview = if (first == null && !isRemoved()) aimogeNewsPreviewUrl(boardSlug, news) else null
     val idText = displayId?.takeIf { it.isNotBlank() }?.let { "ID:$it" }
     return Post(
         id = number().toString(),
@@ -454,8 +478,8 @@ internal fun AimogePostDto.toPost(order: Int): Post {
         timestamp = aimogeTimestamp(createdAt) + (idText?.let { " $it" } ?: ""),
         posterId = idText,
         messageHtml = aimogeMessageHtml(body) + (poll?.let { aimogePollHtml(it, id, pollState) } ?: ""),
-        imageUrl = first?.originalUrl,
-        thumbnailUrl = first?.thumbnailUrl,
+        imageUrl = first?.originalUrl ?: newsPreview,
+        thumbnailUrl = first?.thumbnailUrl ?: newsPreview,
         saidaneLabel = if (sodaneCount > 0) "そうだねx$sodaneCount" else null,
         isDeleted = isRemoved(),
         mail = if (sage) "sage" else null,
@@ -470,13 +494,19 @@ internal fun AimogePostDto.toPost(order: Int): Post {
 }
 
 /** The posts in seq order with references rebuilt; removed posts the server skipped are simply not there. */
-internal fun aimogePosts(posts: List<AimogePostDto>): List<Post> {
+internal fun aimogePosts(posts: List<AimogePostDto>, boardSlug: String = ""): List<Post> {
     // A row without an id is an unreadable post: treated as a missing seq (no row).
     val sorted = posts.filter { it.id != null }.sortedBy { it.seq }
-    return ThreadHtmlParserCore.rebuildReferences(sorted.mapIndexed { index, dto -> dto.toPost(index) })
+    return ThreadHtmlParserCore.rebuildReferences(sorted.mapIndexed { index, dto -> dto.toPost(index, boardSlug) })
 }
 
-internal fun aimogeThreadPage(thread: AimogeThreadDto, posts: List<AimogePostDto>, nowMillis: Long, boardTitle: String? = null): ThreadPage {
+internal fun aimogeThreadPage(
+    thread: AimogeThreadDto,
+    posts: List<AimogePostDto>,
+    nowMillis: Long,
+    boardSlug: String,
+    boardTitle: String? = null
+): ThreadPage {
     val expires = aimogeEpochMillis(thread.expiresAt)
     val closed = aimogeEpochMillis(thread.closedAt)
     val archived = !thread.isPermanent && expires != null && expires <= nowMillis
@@ -486,7 +516,7 @@ internal fun aimogeThreadPage(thread: AimogeThreadDto, posts: List<AimogePostDto
         // A closed thread says so where every mode shows the end of the thread (no new header row, so no list index moves).
         expiresAtLabel = if (closed != null && !archived) AIMOGE_CLOSED_LABEL else if (thread.isPermanent) null else aimogeExpiryLabel(expires, nowMillis),
         deletedNotice = null,
-        posts = aimogePosts(posts),
+        posts = aimogePosts(posts, boardSlug),
         expiresAtEpochMillis = expires,
         closedAtEpochMillis = closed,
         isPermanent = thread.isPermanent,
@@ -497,15 +527,16 @@ internal fun aimogeThreadPage(thread: AimogeThreadDto, posts: List<AimogePostDto
     )
 }
 
-internal fun AimogeThreadDto.toCatalogItem(threadUrl: String): CatalogItem {
+internal fun AimogeThreadDto.toCatalogItem(threadUrl: String, boardSlug: String = ""): CatalogItem {
     val op = opPost
     val first = op?.allAttachments()?.firstOrNull()
+    val newsPreview = if (first == null && op?.isRemoved() == false) aimogeNewsPreviewUrl(boardSlug, op.news) else null
     return CatalogItem(
         id = id,
         threadUrl = threadUrl,
         title = aimogeThreadTitle(op?.body)?.let { if (isR18()) AIMOGE_R18_MARK + it else it },
-        thumbnailUrl = first?.thumbnailUrl,
-        fullImageUrl = first?.originalUrl,
+        thumbnailUrl = first?.thumbnailUrl ?: newsPreview,
+        fullImageUrl = first?.originalUrl ?: newsPreview,
         thumbnailWidth = first?.let { aimogeThumbnailBox(it.width, it.height)?.first },
         thumbnailHeight = first?.let { aimogeThumbnailBox(it.width, it.height)?.second },
         replyCount = replyCount,

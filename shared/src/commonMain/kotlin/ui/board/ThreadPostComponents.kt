@@ -118,11 +118,8 @@ internal fun ThreadPostCard(
     val features = LocalFutachaSharedFeatures.current
     val rawSaidane = saidaneLabelOverride ?: post.saidaneLabel
     val saidaneStyle = features?.value("thread", "threadHeaderSoudaneDisplay")
-    val saidaneLabel = when (saidaneStyle?.substringBefore('|')) {
-        "hide" -> null
-        "simple" -> parseSaidaneCount(rawSaidane)?.toString()
-        else -> rawSaidane
-    }
+    val saidaneDisplay = futachaSaidaneDisplay(saidaneStyle, rawSaidane)
+    val saidaneLabel = saidaneDisplay.label
     val sharedShowDeleted = features?.value("thread", "threadAdminDeleteShow") == "ON"
     var showDeletedBody by remember(post.id, post.messageHtml, post.isDeleted, post.isIsolated, sharedShowDeleted) {
         mutableStateOf(sharedShowDeleted)
@@ -164,6 +161,7 @@ internal fun ThreadPostCard(
             posterIdLabel = posterIdLabel,
             posterIdValue = posterIdValue,
             saidaneLabel = saidaneLabel,
+            saidaneRightAligned = saidaneDisplay.rightAligned,
             onUrlClick = onUrlClick,
             onQuoteRequested = onQuoteRequested,
             onSaidaneClick = onSaidaneClick,
@@ -506,8 +504,77 @@ private fun DeletedPostBodyPlaceholder(
     }
 }
 
+internal data class FutachaSaidaneDisplay(val label: String?, val rightAligned: Boolean)
+
+/**
+ * The ふたちゃ header's そうだね per the shared "そうだねの表示方法" (may 1449174385): シンプル is the
+ * count alone and hides 0件, 0件だけ隠す keeps 通常 but drops the bare "+", and the "(右寄せ)"
+ * variants put it at the right end of the header.
+ */
+internal fun futachaSaidaneDisplay(style: String?, raw: String?): FutachaSaidaneDisplay {
+    val base = style?.substringBefore('|')
+    val right = style?.substringAfter('|', "") == "right"
+    val count = parseSaidaneCount(raw)
+    val label = when (base) {
+        "hide", "none" -> null
+        "simple" -> count?.takeIf { it > 0 }?.toString()
+        "nonzero" -> raw?.takeIf { count != null && count > 0 }
+        else -> raw
+    }
+    return FutachaSaidaneDisplay(label, right && label != null)
+}
+
 @Composable
 internal fun ThreadPostMetadata(
+    post: Post,
+    isOp: Boolean,
+    isSelfPost: Boolean = false,
+    posterIdLabel: PosterIdLabel?,
+    posterIdValue: String?,
+    saidaneLabel: String?,
+    saidaneRightAligned: Boolean = false,
+    onUrlClick: (String) -> Unit,
+    onQuoteRequested: (() -> Unit)? = null,
+    onSaidaneClick: (() -> Unit)? = null,
+    onPosterIdClick: (() -> Unit)? = null,
+    onReferencedByClick: (() -> Unit)? = null,
+    onMediaClick: ((String, MediaType) -> Unit)? = null,
+    onMediaLongPress: ((Post, String, MediaType) -> Unit)? = null,
+    bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard,
+    compactHeader: Boolean = false
+) {
+    if (!saidaneRightAligned || saidaneLabel == null) {
+        ThreadPostMetadataBody(post, isOp, isSelfPost, posterIdLabel, posterIdValue, saidaneLabel, onUrlClick,
+            onQuoteRequested, onSaidaneClick, onPosterIdClick, onReferencedByClick, onMediaClick, onMediaLongPress,
+            bodyTextSize, compactHeader)
+        return
+    }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        Box(Modifier.weight(1f)) {
+            ThreadPostMetadataBody(post, isOp, isSelfPost, posterIdLabel, posterIdValue, null, onUrlClick,
+                onQuoteRequested, onSaidaneClick, onPosterIdClick, onReferencedByClick, onMediaClick, onMediaLongPress,
+                bodyTextSize, compactHeader)
+        }
+        Box(Modifier.testTag("futacha-saidane-right-${post.id}")) {
+            SaidaneLink(
+                label = saidaneLabel,
+                enabled = !isSelfPost && onSaidaneClick != null,
+                onClick = {
+                    AnalyticsTracker.uiControl(
+                        "thread_post_saidane",
+                        "投稿のそうだねを選択",
+                        mapOf("post_context" to analyticsSessionContextId("post", post.id))
+                    )
+                    onSaidaneClick?.invoke()
+                },
+                bodyTextSize = bodyTextSize
+            )
+        }
+    }
+}
+
+@Composable
+private fun ThreadPostMetadataBody(
     post: Post,
     isOp: Boolean,
     isSelfPost: Boolean = false,

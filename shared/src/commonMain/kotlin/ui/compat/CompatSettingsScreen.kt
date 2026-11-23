@@ -305,7 +305,8 @@ internal fun CompatSettingsScreen(
     /** The app's notice: a result that comes after this screen is left is told there (L58). */
     onLastingNotice: (String) -> Unit = {},
     /** Opens あいもげのイベントカレンダー (a row of ふたちゃ拡張); null = the row does nothing. */
-    onOpenAimogeCalendar: (() -> Unit)? = null
+    onOpenAimogeCalendar: (() -> Unit)? = null,
+    futachaSpeechQuoteOptions: Boolean = false
 ) {
     // aimg No.39: every settings page in the size chosen for the settings screens.
     com.valoser.futacha.shared.ui.board.SettingsFontScale(preferences) {
@@ -333,7 +334,8 @@ internal fun CompatSettingsScreen(
         restoreBoardsInto = restoreBoardsInto,
         lastingScope = lastingScope,
         onLastingNotice = onLastingNotice,
-        onOpenAimogeCalendar = onOpenAimogeCalendar
+        onOpenAimogeCalendar = onOpenAimogeCalendar,
+        futachaSpeechQuoteOptions = futachaSpeechQuoteOptions
         )
     }
 }
@@ -373,11 +375,13 @@ private fun CompatSettingsScreenBody(
     /** The app's notice: a result that comes after this screen is left is told there (L58). */
     onLastingNotice: (String) -> Unit = {},
     /** Opens あいもげのイベントカレンダー (a row of ふたちゃ拡張); null = the row does nothing. */
-    onOpenAimogeCalendar: (() -> Unit)? = null
+    onOpenAimogeCalendar: (() -> Unit)? = null,
+    /** ふたちゃ's settings: the 読み上げ page shows its 引用文 switches (may 1449267646). */
+    futachaSpeechQuoteOptions: Boolean = false
 ) {
     com.valoser.futacha.shared.ui.privacy.PrivacySettingsExemption()
     if (path == "speech") {
-        CompatSpeechSettingsScreen(store, preferences, onBack)
+        CompatSpeechSettingsScreen(store, preferences, onBack, futachaQuoteOptions = futachaSpeechQuoteOptions)
         return
     }
     if (path == "aimoge") {
@@ -877,6 +881,17 @@ private fun CompatSettingsScreenBody(
             }
             if (path == "catalog") item(key = "catalog-layout-guide") {
                 com.valoser.futacha.shared.ui.board.CatalogLayoutGuide()
+            }
+            if (!modernPresentation && (path == "viewer" || path == "control")) item(key = "compat-review-display-option") {
+                val viewer = path == "viewer"
+                val key = if (viewer) COMPAT_HIDE_NG_MEDIA_KEY else COMPAT_DRAWER_RETURN_AT_BOTTOM_KEY
+                val label = if (viewer) "NGレスの画像を画像一覧・ビューアで隠す" else "ドロワーの戻るボタンを下に置く"
+                Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(label, Modifier.weight(1f))
+                    androidx.compose.material3.Switch(preferences[key] == "ON", onCheckedChange = { enabled ->
+                        launchSettingsSafely { store.savePreference(key, if (enabled) "ON" else "OFF") }
+                    })
+                }
             }
             if (path == "control") item(key = "boards-from-bottom") {
                 val key = com.valoser.futacha.shared.ui.board.BOARDS_FROM_BOTTOM_KEY
@@ -1500,7 +1515,7 @@ private fun CompatSettingsScreenBody(
         var selected by remember { mutableStateOf(profileController.activeProfile) }
         FutachaAppLockAwareWindow { AlertDialog(
             onDismissRequest = { modeDialog = false },
-            title = { Text("モード") },
+            title = { Text("モードの切り替え") },
             text = {
                 Column {
                     ExperienceProfile.selectableEntries.forEach { profile ->

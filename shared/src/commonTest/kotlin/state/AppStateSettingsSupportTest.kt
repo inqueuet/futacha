@@ -84,7 +84,8 @@ class AppStateSettingsSupportTest {
     fun decodeCatalogGridColumnsValue_clampsToSupportedRange() {
         assertEquals(5, decodeCatalogGridColumnsValue(null))
         assertEquals(2, decodeCatalogGridColumnsValue("1"))
-        assertEquals(8, decodeCatalogGridColumnsValue("99"))
+        assertEquals(12, decodeCatalogGridColumnsValue("99"))
+        assertEquals(10, decodeCatalogGridColumnsValue("10"))
         assertEquals(6, decodeCatalogGridColumnsValue("6"))
     }
 

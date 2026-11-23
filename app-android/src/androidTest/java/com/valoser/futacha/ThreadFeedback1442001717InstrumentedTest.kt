@@ -79,6 +79,146 @@ class ThreadFeedback1442001717InstrumentedTest {
         return layouts.single()
     }
 
+    @Test fun galleryAndViewerCanExcludePostsHiddenByScopedNgRules() = runBlocking {
+        val posts = listOf(
+            CompatPostSnapshot(0, "123", timestamp = "", messageHtml = "blocked message"),
+            CompatPostSnapshot(1, "124", posterId = "ID:Example1", timestamp = "", messageHtml = "ordinary"),
+            CompatPostSnapshot(2, "125", posterId = "ID:Example2", timestamp = "", messageHtml = "ordinary")
+        )
+        val rules = listOf(
+            CompatNgRule("body", CompatNgKind.THREAD_IGNORE, "*", "blocked", 0),
+            CompatNgRule("header", CompatNgKind.THREAD_REFUSE, tab.key, "^ID:Example1$", 0, isRegex = true),
+            CompatNgRule("different-thread", CompatNgKind.THREAD_IGNORE, "other-tab", "ordinary", 0)
+        )
+        assertEquals(posts, filterCompatNgMediaPosts(posts, false, rules, tab))
+        assertEquals(listOf("125"), filterCompatNgMediaPosts(posts, true, rules, tab).map { it.postNo })
+    }
+
+    @Test fun imageNgHidesOnlyTheMatchingAttachment() = runBlocking {
+        val first = "https://example.invalid/first.png"
+        val second = "https://example.invalid/second.png"
+        val post = CompatPostSnapshot(0, "123", timestamp = "", messageHtml = "visible", imageUrl = first,
+            attachments = listOf(first, second).map { com.valoser.futacha.shared.model.PostAttachment(it) })
+        val rules = listOf(CompatNgRule("image", CompatNgKind.THREAD_IMAGE, tab.key, first, 0))
+        val visiblePosts = filterCompatNgMediaPosts(listOf(post), true, rules, tab)
+        assertEquals(listOf(second), compatViewerMediaPosts(visiblePosts, hiddenImages = setOf(first)).map { it.imageUrl })
+    }
+
+    @Test fun imageHashNgHidesTheMatchingAttachmentRegardlessOfItsPosition() = runBlocking {
+        val first = "https://example.invalid/first-hash.png"
+        val second = "https://example.invalid/second-hash.png"
+        val post = CompatPostSnapshot(0, "123", timestamp = "", messageHtml = "", imageUrl = first,
+            attachments = listOf(first, second).map { com.valoser.futacha.shared.model.PostAttachment(it) })
+        val firstHash = "0123456789abcdef"
+        val secondHash = "fedcba9876543210"
+        store.saveImagePhashes(mapOf(
+            compatImagePhashCachePreferenceKey(first) to firstHash,
+            compatImagePhashCachePreferenceKey(second) to secondHash
+        ))
+        val client = HttpClient(MockEngine { error("The saved hashes should be reused") }).also(clients::add)
+        for ((hiddenHash, expectedUrl) in listOf(firstHash to second, secondHash to first)) {
+            val ng = CompatNgRule("hash", CompatNgKind.THREAD_IMAGE_PHASH, tab.key, hiddenHash, 0)
+            val updates = mutableListOf<List<String?>>()
+            collectCompatViewerMediaPosts(client, store, listOf(post), emptySet(), listOf(ng), 0, null) {
+                updates += it.map { media -> media.imageUrl }
+            }
+            assertEquals(listOf(listOf(expectedUrl)), updates)
+        }
+    }
+
+    @Test fun singleApuViewerHonorsImageUrlNg() {
+        val directUrl = "https://dec.2chan.net/up2/src/fu1234567.png"
+        val ng = CompatNgRule("image", CompatNgKind.THREAD_IMAGE, tab.key,
+            "https://dec.2chan.net/up2//src//fu1234567.png", 0)
+        rule.setContent { CompatibilityProfileTheme("mono") {
+            CompositionLocalProvider(LocalFutachaImageLoader provides loader) {
+                CompatViewerScreen(tab, 0, initialPostNo = tab.threadNo, directMediaUrl = directUrl,
+                    store = store, preferences = emptyMap(), ngRules = listOf(ng), httpClient = null,
+                    fileSystem = null, onToolbarEdit = {}, onShowSourcePost = {}, onOpenGallery = { _, _ -> },
+                    onOpenSettings = {}, onOpenCommonSettings = {}, onBack = {})
+            }
+        } }
+        rule.waitUntil(10_000) { rule.onNodeWithText("表示できる画像がありません").isDisplayed() }
+        rule.onNodeWithTag("compat-viewer-image-page").assertDoesNotExist()
+    }
+
+    @Test fun viewerRetainsTheMeasuredImageWhenAnEarlierImageIsHidden() {
+        val posts = (123..125).map { number ->
+            CompatPostSnapshot(number - 123, number.toString(), timestamp = "", messageHtml = "post $number",
+                imageUrl = "https://example.invalid/$number.png")
+        }
+        val snapshot = CompatThreadSnapshot(tab.key, 1, 1, posts = posts)
+        val position = CompatViewerReturnPosition()
+        var rules by mutableStateOf(emptyList<CompatNgRule>())
+        rule.setContent { CompatibilityProfileTheme("mono") {
+            CompositionLocalProvider(LocalFutachaImageLoader provides loader) {
+                CompatViewerScreen(tab, 1, initialPostNo = "124", returnPosition = position,
+                    preparedSnapshot = snapshot, store = store, preferences = mapOf(COMPAT_HIDE_NG_MEDIA_KEY to "ON"),
+                    ngRules = rules, httpClient = null, fileSystem = null, onToolbarEdit = {}, onShowSourcePost = {},
+                    onOpenGallery = { _, _ -> }, onOpenSettings = {}, onOpenCommonSettings = {}, onBack = {})
+            }
+        } }
+        rule.waitUntil(10_000) { position.mediaIdentity == "124" && position.index == 1 }
+        rule.runOnIdle {
+            rules = listOf(CompatNgRule("word", CompatNgKind.THREAD_IGNORE, tab.key, "post 123", 0))
+        }
+        rule.waitUntil(10_000) { position.mediaIdentity == "124" && position.index == 0 }
+        rule.onNodeWithTag("compat-viewer-image-page").assert(hasContentDescription("No.124の画像"))
+    }
+
+    @Test fun replyTextStaysAboveTheAndroidKeyboard() {
+        rule.runOnUiThread { androidx.core.view.WindowCompat.setDecorFitsSystemWindows(rule.activity.window, false) }
+        rule.setContent { CompatibilityProfileTheme("mono") {
+            CompositionLocalProvider(LocalFutachaImageLoader provides loader) {
+                CompatPostScreen(tab, board, repository = null, store = store, preferences = emptyMap(),
+                    appVersion = "test", fileSystem = null, onToolbarEdit = {}, onBack = {})
+            }
+        } }
+        checkReplyAboveKeyboard(rule.onNodeWithTag("compat-post-comment-field"), "toshiaki")
+    }
+
+    @Test fun futachaReplyTextStaysAboveTheAndroidKeyboard() {
+        rule.runOnUiThread { androidx.core.view.WindowCompat.setDecorFitsSystemWindows(rule.activity.window, false) }
+        rule.setContent { MaterialTheme {
+            var comment by remember { mutableStateOf("") }
+            com.valoser.futacha.shared.ui.board.ThreadFormDialog(
+                title = "返信", subtitle = null,
+                attachmentPickerPreference = com.valoser.futacha.shared.util.AttachmentPickerPreference.MEDIA,
+                preferredFileManagerPackage = null, emailPresets = emptyList(),
+                comment = comment, onCommentChange = { comment = it },
+                name = "", onNameChange = {}, email = "", onEmailChange = {}, subject = "", onSubjectChange = {},
+                password = "", onPasswordChange = {}, selectedImage = null, onImageSelected = {},
+                onDismiss = {}, onSubmit = {}, onClear = {}, isSubmitEnabled = false,
+                sendDescription = "送信", boardUrl = board.originalUrl, isReply = true
+            )
+        } }
+        checkReplyAboveKeyboard(rule.onNode(hasText("コメント") and hasSetTextAction()), "futacha")
+    }
+
+    private fun checkReplyAboveKeyboard(field: SemanticsNodeInteraction, mode: String) {
+        val automation = instrumentation.uiAutomation
+        val originalFlags = automation.serviceInfo.flags
+        automation.serviceInfo = automation.serviceInfo.apply {
+            flags = flags or android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+        }
+        try {
+            field.performTouchInput { click() }
+            val ime = android.graphics.Rect()
+            rule.waitUntil(10_000) {
+                automation.windows.firstOrNull {
+                    it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD
+                }?.let { it.getBoundsInScreen(ime); !ime.isEmpty } == true
+            }
+            field.performTextInput("keyboard visibility")
+            field.assertIsDisplayed().assertTextContains("keyboard visibility")
+            val bounds = field.fetchSemanticsNode().boundsInWindow
+            assertTrue("Reply field extends below keyboard top ($bounds, $ime)", bounds.bottom <= ime.top)
+            capture("reply-keyboard-$mode")
+        } finally {
+            automation.serviceInfo = automation.serviceInfo.apply { flags = originalFlags }
+        }
+    }
+
     @Test fun deleteKeyIsMaskedWhileItsOriginalValueIsKeptForTheDraft() {
         val secret = "TEST1234"
         runBlocking { store.saveDraft(CompatReplyDraft(tabKey = tab.key, comment = "本文", deleteKey = secret, updatedAtEpochMillis = 1)) }

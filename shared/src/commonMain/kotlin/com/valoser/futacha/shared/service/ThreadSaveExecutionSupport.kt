@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.service
 
+import com.valoser.futacha.shared.compat.isAimogeNewsBoard
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.SaveStatus
 import com.valoser.futacha.shared.model.SavedThread
@@ -101,13 +102,21 @@ internal data class ThreadSaveMediaPathLock(
 
 internal fun buildThreadSaveMediaDownloadPlan(
     posts: List<Post>,
-    maxMediaItems: Int
+    maxMediaItems: Int,
+    boardUrl: String = "",
+    downloadFullMedia: Boolean = true,
+    retainOriginalsForReuse: Boolean = false
 ): ThreadSaveMediaDownloadPlan {
+    val isNews = isAimogeNewsBoard(boardUrl)
     val scheduledKeys = linkedSetOf<String>()
     val scheduledItems = buildList {
         posts.forEach { post ->
             val extras = threadSaveExtraAttachments(post)
-            (listOf(post.thumbnailUrl to post.imageUrl) + extras.map { it.thumbnailUrl to it.url }).forEach { (thumbnailUrl, imageUrl) ->
+            val sharedNewsImage = isNews && post.imageUrl != null && post.imageUrl == post.thumbnailUrl
+            val thumbnail = post.thumbnailUrl.takeUnless { sharedNewsImage && downloadFullMedia }
+            val keepOriginal = downloadFullMedia || (retainOriginalsForReuse && !sharedNewsImage)
+            val original = post.imageUrl.takeIf { keepOriginal }
+            (listOf(thumbnail to original) + extras.map { it.thumbnailUrl to it.url.takeIf { downloadFullMedia || retainOriginalsForReuse } }).forEach { (thumbnailUrl, imageUrl) ->
             thumbnailUrl?.let { thumbnailUrl ->
                 val key = buildThreadSaveMediaDownloadKey(thumbnailUrl, ThreadSaveMediaRequestType.THUMBNAIL)
                 if (scheduledKeys.add(key) && size < maxMediaItems) {
@@ -399,7 +408,6 @@ internal fun buildThreadSaveSavedThread(
     isContentTruncated: Boolean = false,
     statusOverride: SaveStatus? = null,
     isHtmlMissing: Boolean = false,
-    threadGone: Boolean = false,
     goneFailureCount: Int = 0
 ): SavedThread {
     return SavedThread(

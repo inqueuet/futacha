@@ -92,6 +92,23 @@ class CompatImagePhashCollectionTest {
     }
 
     @Test
+    fun theCatalogKeepsFetchingPastTheBudgetAndPublishesWhatArrivedWhenItRunsOut() = runBlocking {
+        // may 1449247320: a picture still loading when the 15 s budget ran out was never judged, so its NG did not apply.
+        val http = client(slowPaths = setOf("3.png"))
+        val partials = mutableListOf<Set<String>>()
+        try {
+            val result = withTimeout(15_000) {
+                collectCompatImagePhashes(http, candidates(3), batchTimeoutMillis = 800, requestTimeoutMillis = 10_000,
+                    publishEvery = 100, continueAfterBudget = true, onPartial = { partials += it.keys })
+            }
+            assertEquals(setOf("1", "2", "3"), result.keys)
+            // At the budget the first two are shown at once; the slow one is added later without a reload.
+            assertEquals(setOf("1", "2"), partials.first())
+            assertEquals(setOf("1", "2", "3"), partials.last())
+        } finally { http.close() }
+    }
+
+    @Test
     fun slowImagesAreSkippedByTheRequestLimit() = runBlocking {
         val http = client(slowPaths = setOf("2.png"))
         try {
@@ -206,13 +223,15 @@ class CompatImagePhashCollectionTest {
         val http = client()
         try {
             val urls = candidates(3)
-            val posts = urls.mapIndexed { index, (id, url) -> CompatPostSnapshot(index, id, timestamp = "", messageHtml = "", imageUrl = url) }
+            val posts = urls.mapIndexed { index, (id, url) ->
+                CompatPostSnapshot(index, id, timestamp = "", messageHtml = "", imageUrl = url)
+            } + CompatPostSnapshot(3, "4", timestamp = "", messageHtml = "", imageUrl = urls[0].second)
             val phash = fetchCompatImagePhash(http, urls[0].second).getOrThrow()
             val rule = CompatNgRule(id = "r", kind = CompatNgKind.THREAD_IMAGE_PHASH, scopeKey = "",
                 normalizedValue = phash, createdAtEpochMillis = 0L)
             val saved = linkedMapOf<String, String>()
             val hidden = compatImagePhashHiddenPostNos(http, posts, listOf(rule), 0, recordingStore(saved))
-            assertEquals(setOf("1", "2", "3"), hidden)
+            assertEquals(setOf("1", "2", "3", "4"), hidden)
             assertEquals(urls.map { compatImagePhashCachePreferenceKey(it.second) }.toSet(), saved.keys)
 
             // A second pass is served from the persisted hashes: no request reaches the network.
@@ -220,7 +239,7 @@ class CompatImagePhashCollectionTest {
             val stored = saved.toMap()
             val saved2 = linkedMapOf<String, String>()
             val again = compatImagePhashHiddenPostNos(offline, posts, listOf(rule), 0, recordingStore(saved2, stored))
-            assertEquals(setOf("1", "2", "3"), again)
+            assertEquals(setOf("1", "2", "3", "4"), again)
             assertTrue(saved2.isEmpty())
             offline.close()
         } finally { http.close() }

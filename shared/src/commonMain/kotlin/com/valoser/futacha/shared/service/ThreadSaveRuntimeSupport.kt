@@ -115,7 +115,8 @@ internal fun resolveThreadSaveFileName(
     url: String,
     extension: String,
     postId: String,
-    timestampMillis: Long
+    timestampMillis: Long,
+    replaceExtension: Boolean = false
 ): String {
     val candidate = url
         .substringBefore('#')
@@ -133,7 +134,11 @@ internal fun resolveThreadSaveFileName(
         .ifBlank { "bin" }
     val fileName = candidate ?: "${safePostId}_${timestampMillis}.$safeExtension"
     val hasExtension = fileName.substringAfterLast('.', "").isNotBlank()
-    return if (hasExtension) fileName else "$fileName.$extension"
+    return when {
+        replaceExtension -> "${fileName.substringBeforeLast('.', fileName)}.$safeExtension"
+        hasExtension -> fileName
+        else -> "$fileName.$extension"
+    }
 }
 
 private fun String.sanitizeThreadSaveFileNameCandidate(): String {

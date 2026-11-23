@@ -47,6 +47,7 @@ class SingleMediaSaveService(
         storageDirectoryOverride: String? = null,
         useTypeSubdirectory: Boolean = true,
         outputFileNameOverride: String? = null,
+        responseMediaFileName: ((String) -> String)? = null,
         onProgress: (downloadedBytes: Long, totalBytes: Long) -> Unit = { _, _ -> }
     ): Result<SavedMediaFile> = withContext(AppDispatchers.io) {
         val normalizedUrl = mediaUrl.trim()
@@ -80,7 +81,11 @@ class SingleMediaSaveService(
 
                             val contentType = source.contentType
 
-                            val extension = (
+                            val extension = if (responseMediaFileName != null) {
+                                requireNotNull(resolveNewsSavedMediaExtension(normalizedUrl, contentType)) {
+                                    "対応している画像・動画の形式ではありません"
+                                }
+                            } else (
                                 getExtensionFromUrl(normalizedUrl)
                                     ?: getExtensionFromContentType(contentType)
                                     ?: DEFAULT_EXTENSION
@@ -93,7 +98,7 @@ class SingleMediaSaveService(
                             }
 
                             val savedAt = Clock.System.now().toEpochMilliseconds()
-                            val fileName = outputFileNameOverride
+                            val fileName = (responseMediaFileName?.invoke(extension) ?: outputFileNameOverride)
                                 ?.substringAfterLast('/')
                                 ?.substringAfterLast('\\')
                                 ?.sanitizeFileNameCandidate()
@@ -141,7 +146,7 @@ class SingleMediaSaveService(
                             // A caller-chosen name is fixed per target, so a re-save lands on an
                             // existing file. Replace it only once the new bytes are complete: a
                             // failed or cancelled save must leave the previous file in place.
-                            val replaceLocation = if (outputFileNameOverride != null) {
+                            val replaceLocation = if (outputFileNameOverride != null || responseMediaFileName != null) {
                                 baseSaveLocation ?: SaveLocation.Path(baseDirectory)
                             } else null
                             val streamed = streamPayloadToStorage(

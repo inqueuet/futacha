@@ -323,6 +323,8 @@ internal fun BoardManagementTopBar(
                     contentDescription = "メニュー"
                 )
             }
+            var showOpenThreadUrl by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
+            if (showOpenThreadUrl) com.valoser.futacha.shared.ui.OpenThreadUrlDialog(onDismiss = { showOpenThreadUrl = false })
             DropdownMenu(
                 expanded = isMenuExpanded,
                 onDismissRequest = topBarCallbacks.onDismissMenu,
@@ -342,6 +344,14 @@ internal fun BoardManagementTopBar(
                         modifier = Modifier.testTag("futacha-aimoge-calendar")
                     )
                 }
+                DropdownMenuItem(
+                    text = { Text("URLから開く") },
+                    onClick = {
+                        topBarCallbacks.onDismissMenu()
+                        showOpenThreadUrl = true
+                    },
+                    modifier = Modifier.testTag("futacha-open-thread-url")
+                )
                 BoardManagementMenuAction.entries.filter { it != BoardManagementMenuAction.MIX || (mixOffered && com.valoser.futacha.shared.compat.MixAvailability.enabled) }.forEach { action ->
                     DropdownMenuItem(
                         text = { Text(action.label) },

@@ -116,7 +116,7 @@ private fun CompatThreadNgRuleIndex.hasRegexWords(): Boolean =
 
 /** The header fields one by one, so a regular expression can use ^ and $ on a name or an ID (18-20). */
 private fun CompatPostSnapshot.compatThreadNgRawHeaderFields(): List<String> =
-    listOfNotNull(subject, author, mail, timestamp)
+    listOfNotNull(subject, author, mail, timestamp) + compatPosterIdentities(this).map { it.display }
 
 private fun CompatPostSnapshot.compatThreadNgHeaderText(): String =
     normalizeCompatSearchText(compatThreadNgRawHeaderFields().joinToString(" "))
@@ -154,7 +154,8 @@ internal class CompatThreadNgTextEntry(
     /** The only fields the word rules read; a refreshed snapshot with the same text keeps the entry valid. */
     fun isFor(other: CompatPostSnapshot): Boolean = post === other || (
         post.messageHtml == other.messageHtml && post.subject == other.subject &&
-            post.author == other.author && post.mail == other.mail && post.timestamp == other.timestamp
+            post.author == other.author && post.mail == other.mail && post.timestamp == other.timestamp &&
+            post.posterId == other.posterId
         )
 }
 

@@ -36,7 +36,7 @@ import kotlinx.serialization.json.JsonArray
 
 internal const val DEFAULT_CATALOG_GRID_COLUMNS_VALUE = 5
 internal const val MIN_CATALOG_GRID_COLUMNS_VALUE = 2
-internal const val MAX_CATALOG_GRID_COLUMNS_VALUE = 8
+internal const val MAX_CATALOG_GRID_COLUMNS_VALUE = 12
 internal const val SELF_POST_IDENTIFIER_MAX_ENTRIES_VALUE = 20
 internal const val SELF_POST_IDENTIFIER_DELIMITER = "::"
 internal const val APP_STATE_SETTINGS_JSON_MAX_CHARS = 2 * 1024 * 1024

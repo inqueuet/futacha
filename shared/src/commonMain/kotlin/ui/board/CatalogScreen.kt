@@ -697,7 +697,7 @@ private fun CatalogScreenContent(
             }
         } }, onScrollTop = { coroutineScope.launch {
             catalogGridState.scrollToItem(0); catalogListState.scrollToItem(0)
-        } }, onRefresh = performRefresh, onOpenHistoryThread = onHistoryEntrySelected,
+        } }, onRefresh = performRefresh, onOpenHistoryThread = onHistoryEntrySelected, readHistory = history,
         viewedFirstThreadId = viewedFirstThreadId.takeIf { viewedFirstModeName == catalogMode.name },
         ngFilteringEnabled = scaffoldBindings.catalogNgFilteringEnabled,
         createThreadDraft = futachaCreateThreadDraftFormBinding({ createThreadDraft }, { createThreadImage },

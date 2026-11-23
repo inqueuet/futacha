@@ -596,6 +596,27 @@ class ThreadScreenLoadLogicTest {
     }
 
     @Test
+    fun buildReadAloudSegments_readsMarkedQuotesWhenAsked() {
+        // may 1449267646: ふたちゃ can read the quoted lines too, each marked so it is spoken in a voice of its own.
+        val posts = listOf(
+            post(id = "1", messageHtml = "&gt;前の話<br>そうだね"),
+            post(id = "2", messageHtml = "&gt;&gt;引用のみ")
+        )
+        val off = runBlocking { buildReadAloudSegments(posts) }
+        assertEquals(listOf("そうだね"), off.map { it.body })
+        val on = runBlocking { buildReadAloudSegments(posts, includeQuotes = true) }
+        assertEquals(listOf("1", "2"), on.map { it.postId })
+        val runs = com.valoser.futacha.shared.ui.futaber.futaberSpeechRuns(on[0].body)
+        assertEquals(listOf("前の話" to true, "そうだね" to false), runs.map { it.text to it.quoted })
+        assertEquals("引用のみ", readAloudHintText(on[1].body))
+        assertEquals("そうだね", readAloudHintText("そうだね"))
+        assertEquals(false, futachaReadsQuotes(emptyMap()))
+        assertEquals(true, futachaReadsQuotes(mapOf(FUTACHA_SPEECH_READ_QUOTES_KEY to "ON")))
+        assertEquals(true, futachaQuoteLowVoice(emptyMap()))
+        assertEquals(false, futachaQuoteLowVoice(mapOf(FUTACHA_SPEECH_QUOTE_LOW_VOICE_KEY to "OFF")))
+    }
+
+    @Test
     fun buildReadAloudSegments_skipsPostsCollapsedByTheAiFilter() {
         val posts = listOf(
             post(id = "1", messageHtml = "一つ目"),

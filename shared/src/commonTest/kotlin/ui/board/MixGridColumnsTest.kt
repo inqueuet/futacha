@@ -48,5 +48,8 @@ class MixGridColumnsTest {
         assertEquals(1, catalogGridColumnsShown(1, mix = true))
         assertEquals(20, catalogGridColumnsShown(99, mix = true))
         assertEquals(MAX_CATALOG_GRID_COLUMNS, catalogGridColumnsShown(16, mix = false))
+        // may 1449249741: ふたちゃ goes up to 12 columns on a tablet.
+        assertEquals(12, MAX_CATALOG_GRID_COLUMNS)
+        assertEquals(10, catalogGridColumnsShown(10, mix = false))
     }
 }

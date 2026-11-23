@@ -516,7 +516,7 @@ internal fun CompatCatalogGridItem(
     val imageLoader = LocalFutachaImageLoader.current
     val replyCountPlacement = compatCatalogReplyCountPlacement(showReplyCount)
     val platformContext = LocalPlatformContext.current
-    val imageCandidates = remember(item.thumbnailUrl, item.fullImageUrl, lowQuality) {
+    val imageCandidates = remember(item.threadUrl, item.thumbnailUrl, item.fullImageUrl, lowQuality) {
         compatCatalogPreviewCandidates(item, lowQuality)
     }
     // A failed AsyncImagePainter retains Error while its model is unchanged.
@@ -724,7 +724,7 @@ internal fun CompatCatalogListItem(
     val catalogCardBackground = compatibilityCatalogSurface(palette)
     val imageLoader = LocalFutachaImageLoader.current
     val platformContext = LocalPlatformContext.current
-    val imageCandidates = remember(item.thumbnailUrl, item.fullImageUrl, lowQuality) {
+    val imageCandidates = remember(item.threadUrl, item.thumbnailUrl, item.fullImageUrl, lowQuality) {
         compatCatalogPreviewCandidates(item, lowQuality)
     }
     var imageCandidateIndex by remember(imageCandidates, imageRetryGeneration) {

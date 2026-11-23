@@ -19,7 +19,8 @@ internal fun buildThreadScreenDerivedUiState(
     threadTitle: String?,
     isReadAloudControlsVisible: Boolean,
     readAloudStatus: ReadAloudStatus,
-    shouldPrepareReadAloudForCommand: Boolean = false
+    shouldPrepareReadAloudForCommand: Boolean = false,
+    isOfflineCopy: Boolean = false
 ): ThreadScreenDerivedUiState {
     val successState = currentState as? ThreadUiState.Success
     val currentPage = successState?.page
@@ -29,10 +30,17 @@ internal fun buildThreadScreenDerivedUiState(
         ?.let { threadTitle ?: it }
         ?: threadTitle
         ?: "スレッド"
-    val expiresLabel = currentPage?.expiresAtLabel?.takeIf { it.isNotBlank() }
+    val fallenLabel = buildThreadFallenStatusLabel(currentState, isOfflineCopy)
+    // A fallen thread has no "〜頃消えます" any more: the stale expiry is replaced by 落ち (may 1449174385).
+    val expiresLabel = if (fallenLabel != null) null else currentPage?.expiresAtLabel?.takeIf { it.isNotBlank() }
     val truncationLabel = currentPage?.takeIf { it.isTruncated }?.let(::buildThreadTruncationStatusLabel)
     val statusLabel = buildString {
-        resolvedReplyCount?.let { append("${it}レス") }
+        // 落ち leads, so the compact one-line header (which cuts the end) still shows it.
+        fallenLabel?.let { append(it) }
+        resolvedReplyCount?.let {
+            if (isNotEmpty()) append(" / ")
+            append("${it}レス")
+        }
         if (!expiresLabel.isNullOrBlank()) {
             if (isNotEmpty()) append(" / ")
             append(expiresLabel)
@@ -55,6 +63,20 @@ internal fun buildThreadScreenDerivedUiState(
         statusLabel = statusLabel,
         shouldPrepareReadAloudSegments = shouldPrepareReadAloudSegments
     )
+}
+
+/**
+ * "落ち（過去ログ）" when the page came from an archive, "落ち" when the board answered 404/410
+ * (the shown copy, if any, is a local one); null while the thread is not known to have fallen.
+ */
+internal fun buildThreadFallenStatusLabel(currentState: ThreadUiState, isOfflineCopy: Boolean): String? = when (currentState) {
+    is ThreadUiState.Error -> if (currentState.confirmedGone) "落ち" else null
+    is ThreadUiState.Success -> when {
+        currentState.isArchived && !isOfflineCopy -> "落ち（過去ログ）"
+        currentState.isArchived || currentState.confirmedGone -> "落ち"
+        else -> null
+    }
+    ThreadUiState.Loading -> null
 }
 
 internal fun buildThreadTruncationStatusLabel(page: ThreadPage): String {

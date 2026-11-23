@@ -8,6 +8,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.ui.platform.testTag
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -46,6 +50,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogMode
@@ -65,7 +70,9 @@ internal fun CatalogTopBar(
     onSearchActiveChange: (Boolean) -> Unit,
     onNavigationClick: () -> Unit,
     onModeSelected: (CatalogMode) -> Unit,
-    onMenuAction: (CatalogMenuAction) -> Unit
+    onMenuAction: (CatalogMenuAction) -> Unit,
+    // ふたちゃ's コンパクトヘッダー also thins the catalog bar to 48dp (may 1449174385).
+    compact: Boolean = false
 ) {
     val chromeColors = LocalFutachaChromeColors.current
     var isMenuExpanded by remember { mutableStateOf(false) }
@@ -82,6 +89,7 @@ internal fun CatalogTopBar(
     }
 
     TopAppBar(
+        expandedHeight = if (compact && !isSearchActive) 48.dp else TopAppBarDefaults.TopAppBarExpandedHeight,
         navigationIcon = {
             IconButton(onClick = {
                 AnalyticsTracker.uiControl("catalog_history_open", "履歴を開く")
@@ -101,6 +109,27 @@ internal fun CatalogTopBar(
                     focusRequester = focusRequester,
                     modifier = Modifier.fillMaxWidth()
                 )
+            } else if (compact) {
+                Row(
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.testTag("catalog-top-bar-compact")
+                ) {
+                    Text(
+                        text = board?.name ?: "カタログ",
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    Text(
+                        text = mode.label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = chromeColors.onBar,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
@@ -194,7 +223,10 @@ internal fun CatalogNavigationBar(
     menuEntries: List<CatalogNavEntryConfig>,
     onNavigate: (CatalogNavEntryId) -> Unit,
     isRefreshing: Boolean = false,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // ふたちゃ's コンパクトヘッダー: a 56dp bar whose items keep a small one-line label (icons alone were
+    // hard to tell apart) and a 48dp-or-larger touch target (may 1449174385).
+    compact: Boolean = false
 ) {
     val chromeColors = LocalFutachaChromeColors.current
     val visibleEntries = remember(menuEntries) {
@@ -202,7 +234,9 @@ internal fun CatalogNavigationBar(
     }
     ScrollableToolbarRow(itemCount = visibleEntries.size, modifier = modifier, minItemWidth = 48.dp) {
         NavigationBar(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().then(
+                if (compact) Modifier.height(56.dp + navigationBarBottomInset()).testTag("catalog-nav-compact") else Modifier
+            ),
             containerColor = chromeColors.bottomBar,
             contentColor = chromeColors.onBar,
             windowInsets = if (isAndroid()) NavigationBarDefaults.windowInsets else WindowInsets()
@@ -233,6 +267,7 @@ internal fun CatalogNavigationBar(
                             )
                         }
                     },
+                    alwaysShowLabel = true,
                     label = {
                         Text(
                             text = if (isRefreshing && entry.id == CatalogNavEntryId.RefreshCatalog) {
@@ -243,7 +278,12 @@ internal fun CatalogNavigationBar(
                             maxLines = 1,
                             softWrap = false,
                             overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.labelSmall
+                            style = if (compact) {
+                                MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, lineHeight = 11.sp, letterSpacing = 0.sp)
+                            } else {
+                                MaterialTheme.typography.labelSmall
+                            },
+                            modifier = if (compact) Modifier.testTag("catalog-nav-compact-label") else Modifier
                         )
                     },
                     colors = NavigationBarItemDefaults.colors(
@@ -257,6 +297,13 @@ internal fun CatalogNavigationBar(
             }
         }
     }
+}
+
+@Composable
+private fun navigationBarBottomInset(): androidx.compose.ui.unit.Dp {
+    if (!isAndroid()) return 0.dp
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    return with(density) { WindowInsets.navigationBars.getBottom(density).toDp() }
 }
 
 @Composable

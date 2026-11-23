@@ -77,6 +77,13 @@ internal fun pickerMimeTypes(mimeType: String): Pair<String, Array<String>?> {
     return (if (top != null) "$top/*" else "*/*") to list.toTypedArray()
 }
 
+// Every intent path takes the same list form, so a caller passing "image/jpeg,image/png" never sends it as one type.
+private fun Intent.setPickerMimeTypes(mimeType: String) {
+    val (type, extra) = pickerMimeTypes(mimeType)
+    this.type = type
+    if (extra != null) putExtra(Intent.EXTRA_MIME_TYPES, extra)
+}
+
 private class GetContentWithMimeList : ActivityResultContracts.GetContent() {
     override fun createIntent(context: Context, input: String): Intent {
         val (type, extra) = pickerMimeTypes(input)
@@ -233,7 +240,7 @@ actual fun rememberAttachmentPickerLauncher(
                 val preferredPackage = preferredFileManagerPackage
                 if (preferredPackage != null) {
                     val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
-                        type = mimeType
+                        setPickerMimeTypes(mimeType)
                         addCategory(Intent.CATEGORY_OPENABLE)
                         setPackage(preferredPackage)
                     }
@@ -271,7 +278,7 @@ actual fun rememberAttachmentPickerLauncher(
                     )
                 } else {
                     val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
-                        type = mimeType
+                        setPickerMimeTypes(mimeType)
                         addCategory(Intent.CATEGORY_OPENABLE)
                         component = rememberedComponent
                     }
@@ -294,7 +301,7 @@ actual fun rememberAttachmentPickerLauncher(
                 if (preferredPackage != null) {
                     val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                         addCategory(Intent.CATEGORY_OPENABLE)
-                        type = mimeType
+                        setPickerMimeTypes(mimeType)
                         setPackage(preferredPackage)
                     }
                     try {
@@ -304,7 +311,7 @@ actual fun rememberAttachmentPickerLauncher(
                         launchPickerOrNotify(
                             context,
                             openDocumentLauncher,
-                            arrayOf(mimeType),
+                            pickerMimeTypes(mimeType).let { (type, list) -> list ?: arrayOf(type) },
                             "fallback OPEN_DOCUMENT picker",
                             "ファイル選択に対応したアプリがありません"
                         )
@@ -313,7 +320,7 @@ actual fun rememberAttachmentPickerLauncher(
                     launchPickerOrNotify(
                         context,
                         openDocumentLauncher,
-                        arrayOf(mimeType),
+                        pickerMimeTypes(mimeType).let { (type, list) -> list ?: arrayOf(type) },
                         "OPEN_DOCUMENT picker",
                         "ファイル選択に対応したアプリがありません"
                     )
@@ -321,7 +328,7 @@ actual fun rememberAttachmentPickerLauncher(
             }
             AttachmentPickerPreference.ALWAYS_ASK -> {
                 val getContentIntent = Intent(Intent.ACTION_GET_CONTENT).apply {
-                    type = mimeType
+                    setPickerMimeTypes(mimeType)
                     addCategory(Intent.CATEGORY_OPENABLE)
                 }
                 @Suppress("DEPRECATION")
@@ -372,7 +379,7 @@ actual fun rememberAttachmentPickerLauncher(
                 }
             }
             AttachmentPickerPreference.LEGACY_GET_CONTENT -> {
-                val intent = Intent(Intent.ACTION_GET_CONTENT).apply { type = mimeType }
+                val intent = Intent(Intent.ACTION_GET_CONTENT).apply { setPickerMimeTypes(mimeType) }
                 try {
                     packageAwareLauncher.launch(intent)
                 } catch (e: Exception) {

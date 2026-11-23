@@ -25,6 +25,23 @@ import com.valoser.futacha.shared.ui.image.suppressFutabaExtensionFallbackForUrl
 
 class CompatMediaSupportTest {
     @Test
+    fun batchMediaKeepsAllAttachmentsAndAvoidsGeneratedNameCollisions() {
+        val urls = listOf("https://a.example/image.jpg", "https://a.example/image(1).jpg", "https://b.example/image.jpg")
+        val post = CompatPostSnapshot(
+            position = 0, postNo = "1", timestamp = "", messageHtml = "", imageUrl = urls[0],
+            attachments = urls.map { com.valoser.futacha.shared.model.PostAttachment(it) }
+        )
+        assertEquals(urls, compatBatchMediaUrls(listOf(post)))
+        assertEquals(listOf("image.jpg", "image(1).jpg", "image(2).jpg"), compatBatchOutputFileNames(urls).values.toList())
+        val news = "https://publisher.example/image.php?id=1"
+        val preview = post.copy(imageUrl = news, thumbnailUrl = news, attachments = emptyList())
+        assertEquals(listOf(news), compatBatchMediaUrls(listOf(preview), includeNewsImages = true))
+        assertEquals(0, compatBatchMediaUrls(listOf(preview)).size)
+        val second = preview.copy(postNo = "2", imageUrl = news.replace("id=1", "id=2"))
+        assertEquals(1, compatViewerMediaIndex(listOf(preview, second), second.imageUrl.orEmpty()))
+    }
+
+    @Test
     fun apuSmallUrlsAreCanonicalAndNeverTriggerExtensionProbing() {
         val malformed = "https://dec.2chan.net/up2//src//fu1234567.PNG?x=1"
         val source = "https://dec.2chan.net/up2/src/fu1234567.PNG?x=1"

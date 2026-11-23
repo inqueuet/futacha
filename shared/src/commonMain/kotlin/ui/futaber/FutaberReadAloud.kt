@@ -30,6 +30,8 @@ import com.valoser.futacha.shared.util.AppDispatchers
 internal interface FutaberSpeechEngine {
     suspend fun prepare()
     suspend fun speak(text: String)
+    /** The post read after this one (may 1449255847); ずんだもん makes its start ahead. */
+    fun hintNext(text: String?) {}
     fun interrupt() { stop() }
     fun stop()
     fun close()
@@ -50,6 +52,7 @@ internal fun TextSpeaker.asFutaberEngine(
             this@asFutaberEngine.speak(run.text)
         }
     }
+    override fun hintNext(text: String?) = this@asFutaberEngine.hintNext(text?.let { futaberSpeechRuns(it).firstOrNull()?.text })
     override fun interrupt() = this@asFutaberEngine.interrupt()
     override fun stop() = this@asFutaberEngine.stop()
     override fun close() = this@asFutaberEngine.close()
@@ -187,7 +190,8 @@ internal class FutaberReadAloud(
                 // With the screen off no frame is drawn, so a scroll animation never finishes and the reading stalled there.
                 scrollToPostIndex = { index -> kotlinx.coroutines.withTimeoutOrNull(1_500) { scroll(index) } },
                 speakText = { text -> speaker.speak(text) },
-                onFailure = { error -> message = error.message ?: JAPANESE_TTS_UNAVAILABLE_MESSAGE }
+                onFailure = { error -> message = error.message ?: JAPANESE_TTS_UNAVAILABLE_MESSAGE },
+                hintNextText = speaker::hintNext
             )
         )
         if (!result.completedNormally) return

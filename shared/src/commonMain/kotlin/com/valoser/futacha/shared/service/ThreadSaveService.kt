@@ -9,6 +9,7 @@ import com.valoser.futacha.shared.model.SaveStatus
 import com.valoser.futacha.shared.model.SavedPost
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.SavedThreadMetadata
+import com.valoser.futacha.shared.model.localHistoryThumbnailPath
 import com.valoser.futacha.shared.repository.requireSavedThreadMetadataWithinLimits
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
@@ -199,7 +200,10 @@ class ThreadSaveService(
                         Post(id = "extra-$index", author = null, subject = null, timestamp = "",
                             messageHtml = "", imageUrl = url, thumbnailUrl = null)
                     },
-                    maxMediaItems = effectiveLimits.maxMediaItems
+                    maxMediaItems = effectiveLimits.maxMediaItems,
+                    boardUrl = boardUrl,
+                    downloadFullMedia = effectiveLimits.downloadFullMedia,
+                    retainOriginalsForReuse = storageOptions.reuseExistingMedia || storageOptions.seedFromStorageId != null
                 )
 
                 if (writeMetadata && writeInitialMetadataBeforeMedia) {
@@ -359,7 +363,8 @@ class ThreadSaveService(
                             requestType = mediaItem.requestType,
                             postId = mediaItem.postId,
                             startedAtMillis = startedAtMillis,
-                            maxSaveDurationMs = effectiveLimits.maxSaveDurationMs
+                            maxSaveDurationMs = effectiveLimits.maxSaveDurationMs,
+                            useResponseMediaType = com.valoser.futacha.shared.compat.isAimogeNewsBoard(boardUrl)
                         )
                         val budget = effectiveLimits.mediaDownloadBudgetMs
                         if (budget == null) download() else {
@@ -480,7 +485,7 @@ class ThreadSaveService(
                     boardName = boardName,
                     title = title,
                     storageId = storageId,
-                    thumbnailPath = mediaCounts.thumbnailPath,
+                    thumbnailPath = mediaCounts.thumbnailPath ?: savedPosts.firstOrNull()?.localHistoryThumbnailPath(boardUrl),
                     savedAtTimestamp = savedAtTimestamp,
                     postCount = posts.size,
                     imageCount = mediaCounts.imageCount,
@@ -491,7 +496,6 @@ class ThreadSaveService(
                     totalMediaCount = totalMediaCount,
                     isContentTruncated = isTruncated,
                     isHtmlMissing = rawHtmlOptions.enable && rawHtmlRelativePath == null && !threadGone,
-                    threadGone = threadGone,
                     goneFailureCount = mediaDownloadResult.goneFailureCount
                 )
             })
@@ -894,7 +898,8 @@ class ThreadSaveService(
         requestType: ThreadSaveMediaRequestType,
         postId: String,
         startedAtMillis: Long,
-        maxSaveDurationMs: Long
+        maxSaveDurationMs: Long,
+        useResponseMediaType: Boolean
     ): Result<ThreadSaveLocalFileInfo> {
         return downloadAndStoreThreadSaveMedia(
             httpClient = httpClient,
@@ -917,6 +922,7 @@ class ThreadSaveService(
                 readIdleTimeoutMillis = READ_IDLE_TIMEOUT_MILLIS,
                 writeTimeoutMillis = WRITE_TIMEOUT_MILLIS,
                 nowMillis = { Clock.System.now().toEpochMilliseconds() },
+                useResponseMediaType = useResponseMediaType,
                 withMediaWriteLock = { relativePath, block ->
                     withMediaWriteLock(relativePath, block)
                 }

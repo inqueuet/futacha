@@ -49,11 +49,13 @@ class CompatFv1820SettingsTest {
     @Test fun theViewerSettingsSitUnderBrowsingAfterThePreloadAsSwitches() {
         val browsing = compatSettingsGroups("viewer").first { it.first == "閲覧" }.second
         assertEquals(
-            listOf("viewerPreloadMode", COMPAT_VIEWER_TAP_TOOLBAR_KEY, COMPAT_VIEWER_VIDEO_AUTO_HIDE_KEY, COMPAT_VIEWER_VIDEO_AUTO_PLAY_KEY),
+            listOf("viewerPreloadMode", COMPAT_VIEWER_TAP_TOOLBAR_KEY, COMPAT_VIEWER_VIDEO_AUTO_HIDE_KEY, COMPAT_VIEWER_VIDEO_AUTO_PLAY_KEY,
+                COMPAT_VIEWER_VIDEO_END_KEY),
             browsing.map { it.preferenceKey }
         )
-        browsing.drop(1).forEach { assertTrue(compatIsBooleanPreference("viewer", it), it.title) }
-        assertEquals(listOf("ON", "OFF", "OFF"), browsing.drop(1).map { it.summary })
+        // may 1449285572: the last row is a choice (モードの既定／繰り返す／1回で止める), the others switches.
+        browsing.drop(1).dropLast(1).forEach { assertTrue(compatIsBooleanPreference("viewer", it), it.title) }
+        assertEquals(listOf("ON", "OFF", "OFF"), browsing.drop(1).dropLast(1).map { it.summary })
     }
 
     @Test fun theReplyMenuSizeFollows1820AndNeverLeavesTheScreen() {

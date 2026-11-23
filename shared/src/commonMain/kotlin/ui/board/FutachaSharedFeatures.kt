@@ -339,7 +339,8 @@ internal fun ProvideFutachaSharedFeatures(
                         restoreBoardsInto = appStateStore,
                         // Work started here goes on after the settings are closed, its result told here (L58).
                         lastingScope = scope,
-                        onLastingNotice = { notifications.add(it) }
+                        onLastingNotice = { notifications.add(it) },
+                        futachaSpeechQuoteOptions = true
                     )
                 }
             } }

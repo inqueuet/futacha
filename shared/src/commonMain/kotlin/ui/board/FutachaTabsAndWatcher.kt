@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.ui.board
 import androidx.compose.runtime.remember
 import com.valoser.futacha.shared.compat.shownSiteTabs
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.background
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
@@ -99,7 +100,10 @@ internal fun FutachaTabsDialog(
                             toggleFutachaTabFavorite(features.store, tab.key)
                         } }) { Text(if (tab.favorite) "★" else "☆") } },
                         trailingContent = { TextButton(enabled = !busy, onClick = { selected = tab; protect = true }) { Text("整理") } },
-                        modifier = Modifier.clickable { onDismiss(); onOpenThread(tab.toFutachaHistoryEntry()) }
+                        // may 1449250038: a long press opens the same 「タブを整理」 as the 整理 button.
+                        modifier = Modifier.testTag("futacha-tab-row-${tab.key}").combinedClickable(
+                            onLongClick = { if (!busy) { selected = tab; protect = true } }
+                        ) { onDismiss(); onOpenThread(tab.toFutachaHistoryEntry()) }
                     )
                 }
             }

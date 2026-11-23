@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.futaber
 
+import com.valoser.futacha.shared.compat.isAimogeNewsBoard
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -92,6 +93,7 @@ internal fun FutaberArchiveSearchSheet(
     onDismiss: () -> Unit
 ) {
     val colors = LocalFutaberColors.current
+    val isAimoge = com.valoser.futacha.shared.network.extractPastSearchScope(board)?.aimogeSlug != null
     var state by remember(query, board.id) { mutableStateOf<FutaberArchiveSearchState>(FutaberArchiveSearchState.Loading) }
     var attempt by remember(query, board.id) { mutableIntStateOf(0) }
     var allSources by remember(query, board.id) { mutableStateOf(false) }
@@ -127,10 +129,10 @@ internal fun FutaberArchiveSearchSheet(
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 16.dp)
                 )
                 Text(
-                    futaberArchiveNotice(), color = colors.meta, fontSize = 11.sp,
+                    if (isAimoge) "あいもげの公式過去ログを検索します。" else futaberArchiveNotice(), color = colors.meta, fontSize = 11.sp,
                     modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 8.dp)
                 )
-                TextButton(onClick = { allSources = true; attempt++ }, enabled = state !is FutaberArchiveSearchState.Loading) {
+                if (!isAimoge) TextButton(onClick = { allSources = true; attempt++ }, enabled = state !is FutaberArchiveSearchState.Loading) {
                     Text("他の保存先も検索", color = colors.iosBlue)
                 }
                 HorizontalDivider(color = colors.separator, thickness = 0.5.dp)
@@ -162,7 +164,8 @@ internal fun FutaberArchiveSearchSheet(
                                 CatalogPreviewImage(
                                     thumbnailUrl = item.thumbUrl?.takeIf { it.isNotBlank() }, fullImageUrl = null, targetSizePx = 150,
                                     contentDescription = "", modifier = Modifier.size(46.dp).background(colors.fill),
-                                    fallbackTint = colors.meta
+                                    fallbackTint = colors.meta,
+                                    rewriteThumbnailPath = !isAimogeNewsBoard(item.htmlUrl)
                                 )
                                 Column(Modifier.weight(1f).padding(start = 10.dp)) {
                                     Text(

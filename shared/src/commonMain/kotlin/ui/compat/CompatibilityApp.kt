@@ -2529,6 +2529,7 @@ private fun CompatibilityAppContent(
             leaveThreadLabel = (state.host as? CompatHost.ThreadWorkspace)?.let {
                 if (it.origin == CompatThreadOrigin.CATALOG) "カタログに戻る" else "板一覧に戻る"
             },
+            leaveThreadAtBottom = preferences[COMPAT_DRAWER_RETURN_AT_BOTTOM_KEY] == "ON",
             onLeaveThread = {
                 closeDrawerForNavigation()
                 dispatch(CompatibilityEvent.Back)
@@ -3317,6 +3318,7 @@ private fun CompatibilityAppContent(
                         store = store,
                         preferences = preferences,
                         ngRules = ngRules,
+                        commonNgRules = commonNg?.filterRules.orEmpty(),
                         httpClient = httpClient,
                         apngMarkerCache = apngMarkerCache,
                         fileSystem = fileSystem,
@@ -3367,6 +3369,7 @@ private fun CompatibilityAppContent(
                         toolbarRefreshToken = toolbarRefreshToken,
                         preferences = preferences,
                         ngRules = ngRules,
+                        commonNgRules = commonNg?.filterRules.orEmpty(),
                         httpClient = httpClient,
                         fileSystem = fileSystem,
                         cookieRepository = cookieRepository,
@@ -4188,6 +4191,7 @@ private fun CompatCatalogScreen(
                     batchTimeoutMillis = COMPAT_PHASH_BATCH_TIMEOUT_MILLIS,
                     requestTimeoutMillis = COMPAT_PHASH_REQUEST_TIMEOUT_MILLIS,
                     publishEvery = 1,
+                    continueAfterBudget = true,
                     cachedImageLoader = catalogPhashImageLoader,
                     fallbackImageUrl = { id -> items.firstOrNull { it.id == id }?.thumbnailUrl },
                     resolveMissingUrl = { id -> resolveCompatCatalogPhashUrl(items.firstOrNull { it.id == id }?.thumbnailUrl) {
@@ -4529,6 +4533,10 @@ private fun CompatCatalogScreen(
                 effectiveRepository?.fetchOpImageUrl(board.originalUrl, item.id)
             } }
                 .onSuccess { phash ->
+                    // Stored under the catalog's own cache key first, so this cell is hidden at once.
+                    com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation {
+                        store.saveImagePhashes(mapOf(compatImagePhashCachePreferenceKey(url) to phash))
+                    }
                     val scopeKey = compatThreadImageNgScopeKey(board.key, localOnly)
                     store.upsertNgRule(
                         CompatNgRule(
@@ -6111,9 +6119,6 @@ private fun CompatThreadScreen(
         boardUrl = BoardUrlResolver.resolveBoardBaseUrl(tab.originalUrl)
     )
     var openingNotice by remember(tab.key) { mutableStateOf<String?>(null) }
-    LaunchedEffect(openingNotice) {
-        if (openingNotice != null) { delay(5000); openingNotice = null }
-    }
     var aiRetry by remember(tab.key) { mutableStateOf(0) }
     var visiblePosts by remember(tab.key) {
         mutableStateOf<List<CompatPostSnapshot>>(emptyList())
@@ -6140,6 +6145,11 @@ private fun CompatThreadScreen(
     val loadMutex = remember(tab.key) { Mutex() }
     val errorState = remember(tab.key) { mutableStateOf<String?>(null) }
     var error by errorState
+    // The notice gives way to an error in the middle of the screen; its 5 seconds only run while it is shown.
+    val openingNoticeShown = openingNotice != null && error == null
+    LaunchedEffect(openingNotice, openingNoticeShown) {
+        if (openingNoticeShown) { delay(5000); openingNotice = null }
+    }
     fun launchThreadStoreSafely(
         operation: String,
         userMessage: String = COMPAT_THREAD_STORE_FAILURE_MESSAGE,
@@ -6493,7 +6503,7 @@ private fun CompatThreadScreen(
                         else pageSaver?.saveProgress ?: auxiliaryPageSaveProgressFlow
                     ) {
                         if (mode == "save_images_zip") {
-                            val urls = compatBatchMediaUrls(currentSnapshot.posts)
+                            val urls = compatBatchMediaUrls(currentSnapshot.posts, com.valoser.futacha.shared.compat.isAimogeNewsBoard(tab.originalUrl))
                             auxiliaryPageSaveProgressFlow.value = SaveProgress(
                                 phase = SavePhase.DOWNLOADING,
                                 current = 0,
@@ -6506,6 +6516,7 @@ private fun CompatThreadScreen(
                                 threadId = tab.threadNo,
                                 baseSaveLocation = selectedLocation,
                                 baseDirectory = MANUAL_SAVE_DIRECTORY,
+                                useResponseMediaType = com.valoser.futacha.shared.compat.isAimogeNewsBoard(tab.originalUrl),
                                 onProgress = { current, total, item, itemBytes, itemTotalBytes ->
                                     auxiliaryPageSaveProgressFlow.value = SaveProgress(
                                         phase = SavePhase.DOWNLOADING,
@@ -6526,7 +6537,7 @@ private fun CompatThreadScreen(
                             // One folder save for every mode: no media, or no saver, is said so (L74).
                             resultNotice = mediaSaver?.let { saver ->
                                 com.valoser.futacha.shared.ui.board.saveCompatMediaFolder(
-                                    urls = compatBatchMediaUrls(currentSnapshot.posts),
+                                    urls = compatBatchMediaUrls(currentSnapshot.posts, com.valoser.futacha.shared.compat.isAimogeNewsBoard(tab.originalUrl)),
                                     saver = saver,
                                     boardKey = tab.boardKey,
                                     threadId = tab.threadNo,
@@ -6535,7 +6546,8 @@ private fun CompatThreadScreen(
                                     location = selectedLocation,
                                     fileSystem = fileSystem,
                                     onProgress = { auxiliaryPageSaveProgressFlow.value = it },
-                                    onSaved = { pageSavePartialSavedCount = it }
+                                    onSaved = { pageSavePartialSavedCount = it },
+                                    useResponseMediaType = com.valoser.futacha.shared.compat.isAimogeNewsBoard(tab.originalUrl)
                                 )
                             } ?: "保存機能を初期化できませんでした"
                         } else {
@@ -6560,7 +6572,8 @@ private fun CompatThreadScreen(
                                                 0
                                             } else {
                                                 ThreadSaveService.DEFAULT_MAX_MEDIA_ITEMS
-                                            }
+                                            },
+                                            downloadFullMedia = includeFull
                                         ),
                                         storageOptions = buildManualThreadSaveStorageOptions(
                                             tab.boardKey,
@@ -7037,6 +7050,18 @@ private fun CompatThreadScreen(
                     // the latest displayed list before queueing any newly hidden body.
                     if (speechSnapshot !== currentSpeechSnapshot) continue
                     if (batch.text.isNotBlank()) {
+                        // may 1449255847: the next post, so ずんだもん makes its first sentence while this one is spoken.
+                        speaker.hintNext(
+                            if (batch.nextPostIndex >= currentPosts.size) null
+                            else withContext(AppDispatchers.textAnnotation) {
+                                buildCompatReadAloudBatch(
+                                    posts = currentPosts,
+                                    startPostIndex = batch.nextPostIndex,
+                                    startCharacterOffset = batch.nextCharacterOffset,
+                                    visiblePostsByNo = displayedPosts
+                                ).text.takeIf(String::isNotBlank)
+                            }
+                        )
                         speaker.speak(batch.text)
                     }
                     readAloudCursor = batch.nextPostIndex
@@ -7489,9 +7514,7 @@ private fun CompatThreadScreen(
     }
 
     fun openViewerFromMediaUrl(url: String, fallbackPost: CompatPostSnapshot): Boolean {
-        val index = viewerMediaPosts.indexOfFirst { candidate ->
-            compatViewerPostMatchesMediaUrl(candidate, url)
-        }
+        val index = compatViewerMediaIndex(viewerMediaPosts, url)
         if (index >= 0) {
             val candidate = viewerMediaPosts[index]
             launchThreadViewer(index, compatMediaIdentity(candidate))
@@ -10950,6 +10973,7 @@ private fun CompatNavigationDrawer(
     historyClearCount: (suspend () -> Int)? = null,
     /** Over a thread: leaves it for the list it was opened from (the left-edge swipe opens this drawer, so it is also the way back). */
     leaveThreadLabel: String? = null,
+    leaveThreadAtBottom: Boolean = false,
     onLeaveThread: () -> Unit = {}
 ) {
     var contextTab by remember { mutableStateOf<CompatTab?>(null) }
@@ -10977,9 +11001,12 @@ private fun CompatNavigationDrawer(
     // The reference app keeps the activity action bar visible while the
     // drawer is open. Reserve that 56dp row outside the drawer surface so
     // the history heading and list start at the same vertical position.
+    // The drawer's own width is the sheet's. A full-width box made Material's closed position depend on the
+    // screen width, and turning the phone left the drawer open (may 1449254472).
     Box(
         modifier = Modifier
-            .fillMaxSize()
+            .fillMaxHeight()
+            .width(320.dp)
             .compatReferenceStatusBarPadding()
             .padding(top = 56.dp)
     ) {
@@ -11005,7 +11032,7 @@ private fun CompatNavigationDrawer(
                         )
                     }
                     HorizontalDivider()
-                    if (leaveThreadLabel != null) {
+                    if (leaveThreadLabel != null && !leaveThreadAtBottom) {
                         TextButton(onClick = onLeaveThread, modifier = Modifier.fillMaxWidth().testTag("compat-drawer-leave-thread")) {
                             Text("← $leaveThreadLabel")
                         }
@@ -11121,6 +11148,11 @@ private fun CompatNavigationDrawer(
                                     )
                                 }
                             }
+                        }
+                    }
+                    if (leaveThreadLabel != null && leaveThreadAtBottom) {
+                        TextButton(onClick = onLeaveThread, modifier = Modifier.fillMaxWidth().testTag("compat-drawer-leave-thread")) {
+                            Text("← $leaveThreadLabel")
                         }
                     }
                     CompatToolbar(

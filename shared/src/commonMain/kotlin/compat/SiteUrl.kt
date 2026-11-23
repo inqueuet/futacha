@@ -89,6 +89,11 @@ fun aimogeBoardShapeOf(url: String): String? {
     return "https://$AIMOGE_HOST/b/$slug/"
 }
 
+internal const val AIMOGE_NEWS_BOARD_SLUG = "news"
+
+internal fun isAimogeNewsBoard(url: String): Boolean =
+    aimogeBoardShapeOf(url) == "https://$AIMOGE_HOST/b/$AIMOGE_NEWS_BOARD_SLUG/"
+
 /** The canonical あいもげ board address of a board [url] (not a thread) without reading [AimogeAvailability.sitesEnabled]. */
 fun aimogeBoardOnlyShapeOf(url: String): String? {
     val parts = aimogeParts(url) ?: return null

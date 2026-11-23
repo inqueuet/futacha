@@ -44,7 +44,8 @@ internal fun CatalogPreviewImage(
     /** The secondary URL is a cheaper thumbnail, so it is safe after any primary-image failure. */
     allowThumbnailFallbackOnError: Boolean = false,
     /** How the picture fills its box; null follows the shared "トリミング" setting (crop unless it is off), as before. */
-    contentScale: ContentScale? = null
+    contentScale: ContentScale? = null,
+    rewriteThumbnailPath: Boolean = true
 ) {
     val platformContext = LocalPlatformContext.current
     val features = LocalFutachaSharedFeatures.current
@@ -55,8 +56,8 @@ internal fun CatalogPreviewImage(
     val crop = contentScale?.let { it == ContentScale.Crop }
         ?: features?.value("catalog", "catalogThumbCrop")?.let { it == "ON" } ?: true
     // Eco OFF means normal thumbnails, not original-resolution downloads.
-    val candidates = remember(thumbnailUrl, fullImageUrl, lowQuality) {
-        listOfNotNull(thumbnailUrl?.takeIf { lowQuality }?.replace("/thumb/", "/cat/"),
+    val candidates = remember(thumbnailUrl, fullImageUrl, lowQuality, rewriteThumbnailPath) {
+        listOfNotNull(thumbnailUrl?.takeIf { lowQuality && rewriteThumbnailPath }?.replace("/thumb/", "/cat/"),
             thumbnailUrl, fullImageUrl).filter(String::isNotBlank).distinct()
     }
     var candidateIndex by remember(candidates) { mutableIntStateOf(0) }

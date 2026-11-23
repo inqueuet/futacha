@@ -13,6 +13,7 @@ import com.valoser.futacha.shared.service.buildCompatManualImageFolderName
 import com.valoser.futacha.shared.service.runProtectedThreadSave
 import com.valoser.futacha.shared.ui.compat.compatBatchMediaUrls
 import com.valoser.futacha.shared.ui.compat.compatBatchOutputFileNames
+import com.valoser.futacha.shared.ui.compat.uniqueCompatMediaOutputName
 import com.valoser.futacha.shared.ui.compat.manualSaveDestinationLabel
 import com.valoser.futacha.shared.ui.compat.toCompatUserMessage
 import com.valoser.futacha.shared.util.FileSystem
@@ -26,8 +27,8 @@ internal enum class FutachaMediaOnlySaveKind(val label: String) {
 }
 
 /** Same media list as としあき(仮): the original file (or the thumbnail) of every post, de-duplicated. */
-internal fun futachaMediaOnlyUrls(page: ThreadPage): List<String> =
-    compatBatchMediaUrls(page.posts.mapIndexed { index, post -> post.toCompatPostSnapshot(index) })
+internal fun futachaMediaOnlyUrls(page: ThreadPage, includeNewsImages: Boolean = false): List<String> =
+    compatBatchMediaUrls(page.posts.mapIndexed { index, post -> post.toCompatPostSnapshot(index) }, includeNewsImages)
 
 /**
  * Saves only the media of [page]. The calls and the output names are the ones
@@ -45,9 +46,10 @@ internal suspend fun runFutachaMediaOnlySave(
     fileSystem: FileSystem,
     progress: MutableStateFlow<SaveProgress?>,
     /** The media saved so far, for the cancellation message (L74). */
-    onSaved: (Int) -> Unit = {}
+    onSaved: (Int) -> Unit = {},
+    includeNewsImages: Boolean = false
 ): String = runProtectedThreadSave(title, progress) {
-    val urls = futachaMediaOnlyUrls(page)
+    val urls = futachaMediaOnlyUrls(page, includeNewsImages)
     progress.value = SaveProgress(phase = SavePhase.DOWNLOADING, current = 0, total = urls.size,
         currentItem = "しばらくお待ち下さい")
     when (kind) {
@@ -57,6 +59,7 @@ internal suspend fun runFutachaMediaOnlySave(
             threadId = page.threadId,
             baseSaveLocation = location,
             baseDirectory = MANUAL_SAVE_DIRECTORY,
+            useResponseMediaType = includeNewsImages,
             onProgress = { current, total, item, itemBytes, itemTotalBytes ->
                 progress.value = SaveProgress(phase = SavePhase.DOWNLOADING, current = current, total = total,
                     currentItem = item, currentItemBytes = itemBytes, currentItemTotalBytes = itemTotalBytes)
@@ -77,7 +80,8 @@ internal suspend fun runFutachaMediaOnlySave(
             location = location,
             fileSystem = fileSystem,
             onProgress = { progress.value = it },
-            onSaved = onSaved
+            onSaved = onSaved,
+            useResponseMediaType = includeNewsImages
         )
     }
 }
@@ -98,10 +102,12 @@ internal suspend fun saveCompatMediaFolder(
     location: SaveLocation?,
     fileSystem: FileSystem,
     onProgress: (SaveProgress) -> Unit,
-    onSaved: (Int) -> Unit = {}
+    onSaved: (Int) -> Unit = {},
+    useResponseMediaType: Boolean = false
 ): String {
     if (urls.isEmpty()) return COMPAT_NO_MEDIA_TO_SAVE_MESSAGE
     val outputNames = compatBatchOutputFileNames(urls)
+    val responseNames = mutableSetOf<String>()
     val imageFolder = buildCompatManualImageFolderName(boardName = boardName, title = title, threadId = threadId)
     var success = 0
     var failure = 0
@@ -118,6 +124,10 @@ internal suspend fun saveCompatMediaFolder(
                 storageDirectoryOverride = imageFolder,
                 useTypeSubdirectory = false,
                 outputFileNameOverride = outputNames[url],
+                responseMediaFileName = if (useResponseMediaType) ({ extension ->
+                    val stem = item.substringBefore('#').substringBeforeLast('.', item).ifBlank { "media_${index + 1}" }
+                    uniqueCompatMediaOutputName("$stem.$extension", responseNames)
+                }) else null,
                 onProgress = { itemBytes, itemTotalBytes ->
                     onProgress(SaveProgress(phase = SavePhase.DOWNLOADING, current = index, total = urls.size,
                         currentItem = item, currentItemBytes = itemBytes, currentItemTotalBytes = itemTotalBytes))

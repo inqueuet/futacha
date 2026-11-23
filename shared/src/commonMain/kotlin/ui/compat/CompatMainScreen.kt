@@ -518,6 +518,8 @@ internal fun CompatMainScreen(
     var deletingSelected by remember { mutableStateOf(false) }
     LaunchedEffect(deleteMode) { if (!deleteMode) selectedForDelete = emptySet() }
     var addDialog by remember { mutableStateOf(false) }
+    var openThreadUrl by remember { mutableStateOf(false) }
+    if (openThreadUrl) com.valoser.futacha.shared.ui.OpenThreadUrlDialog(onDismiss = { openThreadUrl = false })
     var editingBoard by remember { mutableStateOf<CompatBoard?>(null) }
     var deletingBoard by remember { mutableStateOf<CompatBoard?>(null) }
     var contextBoard by remember { mutableStateOf<CompatBoard?>(null) }
@@ -636,6 +638,7 @@ internal fun CompatMainScreen(
                                         when (label) {
                                             "板一覧" -> onUpdateBoards()
                                             "新規追加" -> addDialog = true
+                                            "URLから開く" -> openThreadUrl = true
                                             "並び替え" -> { reorderMode = !reorderMode; deleteMode = false }
                                             "削除" -> { deleteMode = !deleteMode; reorderMode = false }
                                             "設定" -> onOpenSettings()
@@ -921,7 +924,7 @@ private fun CompatModeDialog(
     var selected by remember { mutableStateOf(activeProfile) }
     FutachaAppLockAwareWindow { AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("モード") },
+        title = { Text("モードの切り替え") },
         text = {
             Column {
                 ExperienceProfile.selectableEntries.forEach { profile ->
@@ -951,7 +954,7 @@ private fun CompatModeDialog(
 
 /** The top-right menu of the board list (あいもげ boards are added through 「新規追加」's URL). */
 internal fun compatMainOverflowLabels(): List<String> =
-    listOf("板一覧", "新規追加", "並び替え", "削除", "保存済みスレッド", "設定", "ヘルプ")
+    listOf("板一覧", "新規追加", "URLから開く", "並び替え", "削除", "保存済みスレッド", "設定", "ヘルプ")
 
 
 /** Moves [key] one row per [step] of [offset] and returns the new order and the rest of the offset. */

@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.model
 
+import com.valoser.futacha.shared.compat.isAimogeNewsBoard
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.buildThreadStorageId
 import com.valoser.futacha.shared.util.FileSystem
@@ -57,17 +58,21 @@ fun SavedThreadMetadata.toThreadPage(
         }
     }
 
+    val isNews = isAimogeNewsBoard(boardUrl)
     val convertedPosts = posts.map { savedPost ->
         val resolvedImagePath = resolveLocalPath(savedPost.localImagePath)
         val resolvedVideoPath = resolveLocalPath(savedPost.localVideoPath)
         val resolvedThumbnailPath = resolveLocalPath(savedPost.localThumbnailPath)
         val primaryImage = resolvedImagePath ?: resolvedVideoPath ?: savedPost.originalImageUrl ?: savedPost.originalVideoUrl
-        val primaryThumbnail = resolvedThumbnailPath ?: savedPost.originalThumbnailUrl
-        val attachments = if (savedPost.extraAttachments.isEmpty() || primaryImage == null) emptyList() else {
-            listOf(PostAttachment(url = primaryImage, thumbnailUrl = primaryThumbnail)) +
+        val primaryThumbnail = resolvedThumbnailPath
+            ?: resolvedImagePath.takeIf { isNews && savedPost.originalImageUrl == savedPost.originalThumbnailUrl }
+            ?: savedPost.originalThumbnailUrl
+        val primaryAttachment = primaryImage ?: primaryThumbnail
+        val attachments = if (savedPost.extraAttachments.isEmpty() || primaryAttachment == null) emptyList() else {
+            listOf(PostAttachment(url = primaryAttachment, thumbnailUrl = primaryThumbnail)) +
                 savedPost.extraAttachments.map { extra ->
                     PostAttachment(
-                        url = resolveLocalPath(extra.localPath) ?: extra.originalUrl,
+                        url = resolveLocalPath(extra.localPath) ?: resolveLocalPath(extra.localThumbnailPath) ?: extra.originalUrl,
                         thumbnailUrl = resolveLocalPath(extra.localThumbnailPath) ?: extra.originalThumbnailUrl
                     )
                 }
@@ -84,7 +89,7 @@ fun SavedThreadMetadata.toThreadPage(
                 ?: resolvedVideoPath
                 ?: savedPost.originalImageUrl
                 ?: savedPost.originalVideoUrl,
-            thumbnailUrl = resolvedThumbnailPath ?: savedPost.originalThumbnailUrl,
+            thumbnailUrl = primaryThumbnail,
             saidaneLabel = null,
             isDeleted = false,
             referencedCount = 0,

@@ -9,6 +9,7 @@ import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -105,6 +106,8 @@ internal fun FutachaCatalogFeatureHost(
     /** The screen's new-thread form; kept as the board's draft while "下書きを端末に保存" is on (FutachaDraftPersistence.kt). */
     createThreadDraft: FutachaDraftFormBinding? = null,
     viewedFirstThreadId: String? = null,
+    /** ふたちゃ's history, for "既読のスレに色を付ける". */
+    readHistory: List<ThreadHistoryEntry> = emptyList(),
     content: @Composable (CatalogUiState) -> Unit
 ) {
     val features = LocalFutachaSharedFeatures.current
@@ -326,6 +329,7 @@ internal fun FutachaCatalogFeatureHost(
         try {
             // Publish each batch so matching threads disappear while the rest load.
             computed.putAll(collectCompatImagePhashes(client, missing,
+                continueAfterBudget = true,
                 cachedImageLoader = cachedImageLoader,
                 fallbackImageUrl = { id -> items.firstOrNull { it.id == id }?.thumbnailUrl },
                 resolveMissingUrl = { id -> com.valoser.futacha.shared.ui.compat.resolveCompatCatalogPhashUrl(items.firstOrNull { it.id == id }?.thumbnailUrl) {
@@ -385,6 +389,9 @@ internal fun FutachaCatalogFeatureHost(
                 FutachaCatalogLongPress.MENU -> selected = item
             }
     }
+    var titleNgItem by remember(boardKey) { mutableStateOf<CatalogItem?>(null) }
+    var titleNgText by remember(boardKey) { mutableStateOf("") }
+    var titleNgError by remember(boardKey) { mutableStateOf<String?>(null) }
     val currentLongPress = rememberUpdatedState(longPressHandler)
     val stableLongPress = remember { { item: CatalogItem -> currentLongPress.value(item) } }
     // Up to 3,000 thread addresses are normalised for this: done off the main thread, and the marks shown keep the last
@@ -396,8 +403,15 @@ internal fun FutachaCatalogFeatureHost(
     val viewedFirstItems = remember(projected, viewedFirstThreadId, viewedFirstEnabled) {
         projected?.let { catalogWithViewedThreadFirst(it, viewedFirstThreadId.takeIf { viewedFirstEnabled }) }
     }
+    // may 1449174385: the "+N" marks can be turned off (default ON), read threads tinted (default OFF).
+    val showReplyBadges = features.value("catalog", com.valoser.futacha.shared.ui.compat.FUTACHA_CATALOG_NEW_REPLIES_BADGE_KEY) != "OFF"
+    val readColorOn = features.value("catalog", com.valoser.futacha.shared.ui.compat.FUTACHA_CATALOG_READ_COLOR_KEY) == "ON"
+    val readThreadIds = remember(readColorOn, readHistory, board) {
+        if (readColorOn) com.valoser.futacha.shared.ui.futaber.futaberReadThreadIds(readHistory, board) else null
+    }
     CompositionLocalProvider(LocalFutachaCatalogTools provides tools,
-        LocalFutachaCatalogReplyIndicators provides replyIndicators,
+        LocalFutachaCatalogReplyIndicators provides (if (showReplyBadges) replyIndicators else emptyMap()),
+        LocalFutachaCatalogReadThreadIds provides readThreadIds,
         LocalFutachaCatalogSourceTitleLimit provides titleLimit,
         LocalFutachaTabStrip provides strip,
         LocalFutachaScrollRefreshEnabled provides (features.value("catalog", "catalogPullToRefresh") != "OFF"),
@@ -431,6 +445,9 @@ internal fun FutachaCatalogFeatureHost(
             TextButton(onClick = { selected = null; onOpenThread(item) }) { Text("スレッドを開く") }
             TextButton(onClick = { addTab(item) }) { Text("タブに追加") }
             TextButton(onClick = { register(item) }) { Text("NGスレッドに登録") }
+            if (features.appStateStore != null) TextButton(modifier = Modifier.testTag("futacha-catalog-title-ng"), onClick = {
+                titleNgItem = item; titleNgText = item.title.orEmpty(); titleNgError = null; selected = null
+            }) { Text("題名からNGワードを登録") }
             if (item.fullImageUrl != null || item.thumbnailUrl != null) TextButton(onClick = { imageNg = item; selected = null }) { Text("NG画像に登録") }
             if (futabaBoard) TextButton(enabled = !reporting, onClick = { selected = null; pendingReport = item }) {
                 Text(if (reviewComplianceEnabled) "不適切な投稿を通報" else "DEL依頼を送信")
@@ -446,6 +463,34 @@ internal fun FutachaCatalogFeatureHost(
             }) { Text("ブラウザで開く") }
         }
     }, confirmButton = { TextButton(onClick = { selected = null }) { Text("閉じる") } }) } }
+    titleNgItem?.let { _ -> FutachaAppLockAwareWindow {
+        AlertDialog(
+            onDismissRequest = { titleNgItem = null },
+            title = { Text("題名からNGワードを登録") },
+            text = { Column {
+                Text("残した語句を含む題名のスレをカタログで隠します。要らない部分を消してから登録してください。")
+                androidx.compose.material3.OutlinedTextField(titleNgText, { titleNgText = it; titleNgError = null },
+                    modifier = Modifier.fillMaxWidth().testTag("futacha-catalog-title-ng-field"), label = { Text("NGワード") })
+                titleNgError?.let { Text(it, color = androidx.compose.material3.MaterialTheme.colorScheme.error) }
+            } },
+            confirmButton = { TextButton(modifier = Modifier.testTag("futacha-catalog-title-ng-save"), onClick = {
+                val store = features.appStateStore ?: return@TextButton
+                val word = titleNgText
+                scope.launch {
+                    val current = store.catalogNgWords.first()
+                    when (val result = futachaAddCatalogNgWord(current, word)) {
+                        is FutachaTitleNgResult.Rejected -> titleNgError = result.reason
+                        is FutachaTitleNgResult.Added -> {
+                            store.setCatalogNgWords(result.words)
+                            titleNgItem = null
+                            message = "NGワード「${word.trim()}」を登録しました"
+                        }
+                    }
+                }
+            }) { Text("登録") } },
+            dismissButton = { TextButton(onClick = { titleNgItem = null }) { Text("キャンセル") } }
+        )
+    } }
     pendingReport?.let { item -> FutachaAppLockAwareWindow {
         AlertDialog(
             onDismissRequest = { pendingReport = null },

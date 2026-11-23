@@ -7,10 +7,10 @@ import com.valoser.futacha.shared.model.HISTORY_ARCHIVE_VERSION
 import com.valoser.futacha.shared.model.HistoryArchiveManifest
 import com.valoser.futacha.shared.model.HistoryArchivePayloadStatus
 import com.valoser.futacha.shared.model.SaveStatus
-import com.valoser.futacha.shared.model.SavedPost
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.SavedThreadMetadata
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.model.localHistoryThumbnailPath
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
 import kotlinx.coroutines.NonCancellable
@@ -386,7 +386,13 @@ internal fun sanitizeImportedMetadataLocalPaths(
             post.copy(
                 localImagePath = retained(post.localImagePath),
                 localVideoPath = retained(post.localVideoPath),
-                localThumbnailPath = retained(post.localThumbnailPath)
+                localThumbnailPath = retained(post.localThumbnailPath),
+                extraAttachments = post.extraAttachments.map { attachment ->
+                    attachment.copy(
+                        localPath = retained(attachment.localPath),
+                        localThumbnailPath = retained(attachment.localThumbnailPath)
+                    )
+                }
             )
         }
     )
@@ -411,7 +417,7 @@ private fun buildImportedSavedThread(
         boardName = metadata.boardName,
         title = metadata.title,
         storageId = storageId,
-        thumbnailPath = firstLocalThumbnailPath(metadata.posts),
+        thumbnailPath = metadata.posts.firstNotNullOfOrNull { it.localHistoryThumbnailPath(metadata.boardUrl) },
         savedAt = metadata.savedAt,
         postCount = metadata.posts.size,
         imageCount = metadata.posts.count { it.localImagePath != null },
@@ -419,12 +425,6 @@ private fun buildImportedSavedThread(
         totalSize = totalSize,
         status = if (isPartial) SaveStatus.PARTIAL else SaveStatus.COMPLETED
     )
-}
-
-private fun firstLocalThumbnailPath(posts: List<SavedPost>): String? {
-    return posts.firstNotNullOfOrNull { post ->
-        post.localThumbnailPath?.takeIf { it.isNotBlank() }
-    }
 }
 
 private fun String.removeArchivePayloadRoot(payloadRoot: String): String? {

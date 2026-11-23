@@ -60,7 +60,7 @@ class ExperienceModeSelectionInstrumentedTest {
                 ) { GlobalSettingsModeSection() }
             }
         }
-        rule.onNodeWithText("モード").performClick()
+        rule.onNodeWithText("モードの切り替え").performClick()
         rule.onNodeWithText("ふたちゃモード").assertIsDisplayed()
         rule.onNodeWithText("としあき(仮)モード").assertIsDisplayed()
         rule.onNodeWithText("ふたばー風モード").assertIsDisplayed()
@@ -88,7 +88,7 @@ class ExperienceModeSelectionInstrumentedTest {
                 ) { GlobalSettingsModeSection() }
             }
         }
-        rule.onNodeWithText("モード").performClick()
+        rule.onNodeWithText("モードの切り替え").performClick()
         rule.onNodeWithText("ふたったー風モード").assertIsDisplayed()
         assertEquals(0, rule.onAllNodesWithText("開発版のみ", substring = true).fetchSemanticsNodes().size)
         rule.onNodeWithText("ふたったー風モード").performClick()

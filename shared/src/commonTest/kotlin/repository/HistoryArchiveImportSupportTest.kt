@@ -217,7 +217,11 @@ class HistoryArchiveImportSupportTest {
                     originalVideoUrl = null,
                     localVideoPath = "../private/video.webm",
                     originalThumbnailUrl = "https://example.invalid/thumb/123s.jpg",
-                    localThumbnailPath = "thumb/missing.jpg"
+                    localThumbnailPath = "thumb/missing.jpg",
+                    extraAttachments = listOf(com.valoser.futacha.shared.model.SavedAttachment(
+                        originalUrl = "https://example.invalid/src/2.jpg", localPath = "src/2.jpg",
+                        localThumbnailPath = "../private/2.jpg"
+                    ))
                 )
             ),
             totalSize = 0L
@@ -225,13 +229,15 @@ class HistoryArchiveImportSupportTest {
 
         val sanitized = sanitizeImportedMetadataLocalPaths(
             metadata = metadata,
-            copiedRelativePaths = setOf("123.htm", "src/123.jpg")
+            copiedRelativePaths = setOf("123.htm", "src/123.jpg", "src/2.jpg")
         )
 
         assertEquals("123.htm", sanitized.rawHtmlPath)
         assertEquals("src/123.jpg", sanitized.posts.single().localImagePath)
         assertEquals(null, sanitized.posts.single().localVideoPath)
         assertEquals(null, sanitized.posts.single().localThumbnailPath)
+        assertEquals("src/2.jpg", sanitized.posts.single().extraAttachments.single().localPath)
+        assertEquals(null, sanitized.posts.single().extraAttachments.single().localThumbnailPath)
     }
 
     private suspend fun seedSavedThread(

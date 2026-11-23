@@ -79,6 +79,33 @@ class HistoryArchiveExportSupportTest {
         assertEquals(0, result.copiedFileCount)
     }
 
+    @Test
+    fun exportIncludesAdditionalAttachmentsAndReportsMissingFiles() = runBlocking {
+        val fs = InMemoryFileSystem()
+        val repository = seedSavedThread(fs)
+        val root = "autosaved_threads/img__123_payload"
+        val metadata = repository.loadThreadMetadata("123", "img").getOrThrow()
+        val post = metadata.posts.single().copy(extraAttachments = listOf(
+            com.valoser.futacha.shared.model.SavedAttachment(
+                originalUrl = "https://example.com/src/2.webm", localPath = "videos/2.webm",
+                localThumbnailPath = "thumb/2.jpg"
+            ),
+            com.valoser.futacha.shared.model.SavedAttachment(
+                originalUrl = "https://example.com/src/3.jpg", localPath = "src/3.jpg"
+            )
+        ))
+        fs.writeString("$root/metadata.json", json.encodeToString(metadata.copy(posts = listOf(post)))).getOrThrow()
+        fs.writeBytes("$root/videos/2.webm", byteArrayOf(1)).getOrThrow()
+        fs.writeBytes("$root/thumb/2.jpg", byteArrayOf(2)).getOrThrow()
+        val result = exportHistoryArchive(fs, listOf(repository), HistoryArchiveExportRequest(
+            archiveId = "extra-media", historyEntries = listOf(historyEntry("123")), exportedAtEpochMillis = 1
+        )).getOrThrow()
+        val entry = result.manifest.entries.single()
+        assertEquals(HistoryArchivePayloadStatus.PARTIAL, entry.payloadStatus)
+        assertTrue(entry.payloadFiles.any { it.relativePath.endsWith("/videos/2.webm") })
+        assertTrue(entry.payloadFiles.any { it.relativePath.endsWith("/thumb/2.jpg") })
+    }
+
     private suspend fun seedSavedThread(fileSystem: InMemoryFileSystem): SavedThreadRepository {
         val repository = SavedThreadRepository(fileSystem, baseDirectory = "autosaved_threads")
         val savedThread = SavedThread(

@@ -43,6 +43,7 @@ class ImageZipSaveService(
         baseSaveLocation: SaveLocation? = null,
         baseDirectory: String = MANUAL_SAVE_DIRECTORY,
         fileNameSuffix: String? = null,
+        useResponseMediaType: Boolean = false,
         onProgress: (
             current: Int,
             total: Int,
@@ -79,7 +80,7 @@ class ImageZipSaveService(
                     coroutineContext.ensureActive()
                     val requestedName = safeMediaName(url, index)
                     onProgress(index, urls.size, requestedName, 0L, 0L)
-                    val entryName = uniqueName(requestedName, usedNames)
+                    var storedName = requestedName
                     var entryStarted = false
                     val stagingPath = ZipStaging.newPath(index)
                     try {
@@ -88,6 +89,10 @@ class ImageZipSaveService(
                         // Validate a complete source before emitting its ZIP local header.
                         fileSystem.createDirectory(ZIP_STAGING_DIRECTORY).getOrThrow()
                         withMediaSaveSource(httpClient, fileSystem, url, originalMediaSource) { source ->
+                            if (useResponseMediaType) {
+                                val extension = requireNotNull(resolveNewsSavedMediaExtension(url, source.contentType))
+                                storedName = "${requestedName.substringBeforeLast('.', requestedName)}.$extension"
+                            }
                             require(source.declaredSize <= MAX_ZIP_ENTRY_BYTES) { "ファイルが大きすぎます" }
                             declaredSize = source.declaredSize
                             fileSystem.writeByteStream(stagingPath) { staged ->
@@ -108,6 +113,7 @@ class ImageZipSaveService(
                                 }
                             }.getOrThrow()
                         }
+                        val entryName = uniqueName(storedName, usedNames)
                         entryStarted = true
                         fileSystem.readByteStream(stagingPath) { source ->
                             zip.writeEntry(entryName, MAX_ZIP_ENTRY_BYTES, verify = {

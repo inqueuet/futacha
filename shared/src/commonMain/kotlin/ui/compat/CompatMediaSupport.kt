@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.compat.isAimogeNewsBoard
 import com.valoser.futacha.shared.util.readResponseBody
 import com.valoser.futacha.shared.ui.board.statusCodeOrNull
 import kotlin.coroutines.cancellation.CancellationException
@@ -381,24 +382,36 @@ internal fun buildCompatGalleryBatchSaveMessage(
     }
 }
 
-internal fun compatBatchMediaUrls(posts: List<CompatPostSnapshot>): List<String> = posts
-    .mapNotNull { it.imageUrl ?: it.thumbnailUrl }
-    .filter { classifyFutabaMedia(it) != FutabaMediaKind.UNSUPPORTED }
-    .distinct()
+internal fun compatBatchMediaUrls(posts: List<CompatPostSnapshot>, includeNewsImages: Boolean = false): List<String> =
+    posts.flatMap { post ->
+        val primary = (post.imageUrl ?: post.thumbnailUrl)?.takeIf {
+            classifyFutabaMedia(it) != FutabaMediaKind.UNSUPPORTED ||
+                (includeNewsImages && post.imageUrl == post.thumbnailUrl && it.startsWith("https://", true))
+        }
+        listOfNotNull(primary) + compatExtraAttachments(post).map { it.url }
+    }.filter({ com.valoser.futacha.shared.util.isSupportedMediaSaveSource(it) }).distinct()
 
 internal fun compatBatchOutputFileNames(urls: List<String>): Map<String, String> {
-    val counts = mutableMapOf<String, Int>()
-    return buildMap {
-        urls.distinct().forEachIndexed { index, url ->
-            val rawName = url.substringBefore('#').substringBefore('?').substringAfterLast('/')
-                .ifBlank { "media_${index + 1}.bin" }
-            val stem = rawName.substringBeforeLast('.', rawName)
-            val extension = rawName.substringAfterLast('.', "")
-                .let { if (it.isBlank()) "" else ".$it" }
-            val collisionIndex = counts.getOrElse(rawName) { 0 }
-            counts[rawName] = collisionIndex + 1
-            put(url, if (collisionIndex == 0) rawName else "$stem($collisionIndex)$extension")
-        }
+    val usedNames = mutableSetOf<String>()
+    return urls.distinct().mapIndexed { index, url ->
+        val name = url.substringBefore('#').substringBefore('?').substringAfterLast('/')
+            .ifBlank { "media_${index + 1}.bin" }
+        url to uniqueCompatMediaOutputName(name, usedNames)
+    }.toMap()
+}
+
+internal fun uniqueCompatMediaOutputName(rawName: String, usedNames: MutableSet<String>): String {
+    val safeName = rawName.replace(Regex("""[^A-Za-z0-9._()\-]"""), "_").trim('_').ifBlank { "media" }
+    val extension = safeName.substringAfterLast('.', "").takeIf { it.isNotBlank() && it.length <= 8 }
+        ?.let { ".$it" }.orEmpty()
+    val stem = safeName.removeSuffix(extension)
+    var suffix = ""
+    var count = 0
+    while (true) {
+        val candidate = (stem.take(96 - suffix.length - extension.length) + suffix + extension).trim('_')
+            .takeUnless { it.isBlank() || it == "." || it == ".." } ?: "media$suffix"
+        if (usedNames.add(candidate.lowercase())) return candidate
+        suffix = "(${++count})"
     }
 }
 
@@ -459,6 +472,15 @@ internal fun compatViewerPostMatchesMediaUrl(
         post.thumbnailUrl,
         resolveCompatViewerMediaUrl(post)
     ).any { candidate -> compatCanonicalMediaUrl(candidate) == requested }
+}
+
+internal fun compatViewerMediaIndex(posts: List<CompatPostSnapshot>, url: String): Int {
+    val requested = url.substringBefore('#')
+    val exact = posts.indexOfFirst {
+        requested == it.imageUrl?.substringBefore('#') || requested == it.thumbnailUrl?.substringBefore('#')
+    }
+    if (exact >= 0) return exact
+    return posts.indices.filter { compatViewerPostMatchesMediaUrl(posts[it], url) }.singleOrNull() ?: -1
 }
 
 /**
@@ -572,8 +594,33 @@ internal fun compatViewerMediaPosts(
         ((post.imageUrl ?: post.thumbnailUrl)?.let(::isCompatApuSmallMediaUrl) != true ||
             compatApuSmallGalleryEnabled(upsThumbnailMethod)) &&
         post.postNo !in hiddenPostNos &&
-        post.imageUrl !in hiddenImages &&
-        post.thumbnailUrl !in hiddenImages
+        !compatMediaUrlIsNg(post.imageUrl, hiddenImages) &&
+        !compatMediaUrlIsNg(post.thumbnailUrl, hiddenImages)
+}
+
+internal fun compatMediaUrlIsNg(url: String?, hiddenImages: Set<String>): Boolean =
+    hiddenImages.isNotEmpty() && url != null && normalizeCompatApuSmallMediaUrl(url) in hiddenImages
+
+internal suspend fun collectCompatViewerMediaPosts(
+    httpClient: HttpClient?,
+    store: com.valoser.futacha.shared.compat.CompatibilityStore?,
+    posts: List<CompatPostSnapshot>,
+    hiddenImages: Set<String>,
+    imageNgPhashRules: List<com.valoser.futacha.shared.compat.CompatNgRule>,
+    threshold: Int,
+    upsThumbnailMethod: String?,
+    onUpdate: suspend (List<CompatPostSnapshot>) -> Unit
+) {
+    val media = withContext(AppDispatchers.parsing) {
+        compatViewerMediaPosts(posts, hiddenImages, upsThumbnailMethod = upsThumbnailMethod)
+    }
+    collectCompatImagePhashHiddenPostNos(
+        httpClient, store, media, imageNgPhashRules, threshold, keyByMediaUrl = true
+    ) { hiddenUrls ->
+        onUpdate(if (hiddenUrls.isEmpty()) media else withContext(AppDispatchers.parsing) {
+            media.filterNot { normalizeCompatApuSmallMediaUrl((it.imageUrl ?: it.thumbnailUrl).orEmpty()) in hiddenUrls }
+        })
+    }
 }
 
 /**
@@ -592,15 +639,8 @@ internal suspend fun compatImagePhashHiddenPostNos(
 ): Set<String> {
     val client = httpClient ?: return emptySet()
     if (rules.isEmpty()) return emptySet()
-    val candidates = withContext(AppDispatchers.parsing) {
-        posts
-            .map(::normalizeCompatPostMedia)
-            .mapNotNull { post ->
-                (post.imageUrl ?: post.thumbnailUrl)?.let { url -> post.postNo to url }
-            }
-            .distinctBy { it.second }
-            .take(256)
-    }
+    val idsByUrl = compatImagePhashIdsByUrl(posts, keyByMediaUrl = false)
+    val candidates = idsByUrl.map { (url, ids) -> ids.first() to url }
     val stored = loadStoredCompatThreadImagePhashes(store, candidates)
     val missing = candidates.filterNot { it.first in stored }
     val computed = linkedMapOf<String, String>()
@@ -611,9 +651,10 @@ internal suspend fun compatImagePhashHiddenPostNos(
             saveComputedCompatImagePhashes(store, missing, computed, "CompatMedia")
         }
     }
-    return (stored + computed).filterValues { phash ->
+    val matches = (stored + computed).filterValues { phash ->
         rules.any { rule -> CompatImagePhash.isSimilar(phash, rule.normalizedValue, threshold) }
-    }.keys
+    }
+    return idsByUrl.values.filter { it.first() in matches }.flatten().toSet()
 }
 
 /**
@@ -633,6 +674,7 @@ internal suspend fun collectCompatImagePhashHiddenPostNos(
     batchTimeoutMillis: Long = COMPAT_PHASH_BATCH_TIMEOUT_MILLIS,
     requestTimeoutMillis: Long = COMPAT_PHASH_REQUEST_TIMEOUT_MILLIS,
     publishEvery: Int = 16,
+    keyByMediaUrl: Boolean = false,
     onUpdate: suspend (Set<String>) -> Unit
 ) {
     val client = httpClient
@@ -640,18 +682,13 @@ internal suspend fun collectCompatImagePhashHiddenPostNos(
         onUpdate(emptySet())
         return
     }
-    val candidates = withContext(AppDispatchers.parsing) {
-        posts
-            .map(::normalizeCompatPostMedia)
-            .mapNotNull { post ->
-                (post.imageUrl ?: post.thumbnailUrl)?.let { url -> post.postNo to url }
-            }
-            .distinctBy { it.second }
-            .take(256)
-    }
-    fun hiddenBy(hashes: Map<String, String>): Set<String> = hashes.filterValues { phash ->
-        rules.any { rule -> CompatImagePhash.isSimilar(phash, rule.normalizedValue, threshold) }
-    }.keys
+    val idsByUrl = compatImagePhashIdsByUrl(posts, keyByMediaUrl)
+    val candidates = idsByUrl.map { (url, ids) -> ids.first() to url }
+    fun hiddenBy(hashes: Map<String, String>): Set<String> = idsByUrl.values.filter { ids ->
+        hashes[ids.first()]?.let { phash ->
+            rules.any { rule -> CompatImagePhash.isSimilar(phash, rule.normalizedValue, threshold) }
+        } == true
+    }.flatten().toSet()
     val memoryHashes = compatPhashCacheMutex.withLock {
         candidates.mapNotNull { (postNo, url) -> compatPhashCache[url]?.let { postNo to it } }.toMap()
     }
@@ -686,6 +723,15 @@ internal suspend fun collectCompatImagePhashHiddenPostNos(
         // Also on cancellation: hashes already computed must not be fetched again next time.
         saveComputedCompatImagePhashes(store, missing, computed, "CompatMedia")
     }
+}
+
+private suspend fun compatImagePhashIdsByUrl(
+    posts: List<CompatPostSnapshot>,
+    keyByMediaUrl: Boolean
+): Map<String, List<String>> = withContext(AppDispatchers.parsing) {
+    posts.asSequence().map(::normalizeCompatPostMedia).mapNotNull { post ->
+        (post.imageUrl ?: post.thumbnailUrl)?.let { url -> url to if (keyByMediaUrl) url else post.postNo }
+    }.groupBy({ it.first }, { it.second }).entries.take(256).associate { it.toPair() }
 }
 
 /** Persists [computed] (id -> pHash) best-effort; safe to call from a cancelled coroutine. */
@@ -725,13 +771,15 @@ internal suspend fun collectCompatImagePhashes(
     concurrency: Int = COMPAT_PHASH_FETCH_CONCURRENCY,
     resolveMissingUrl: (suspend (String) -> String?)? = null,
     fallbackImageUrl: ((String) -> String?)? = null,
-    cachedImageLoader: coil3.ImageLoader? = null
+    cachedImageLoader: coil3.ImageLoader? = null,
+    continueAfterBudget: Boolean = false
 ): Map<String, String> {
     val found = linkedMapOf<String, String>()
     collectCompatImagePhashesConcurrently(
         httpClient = httpClient,
         candidates = candidates,
         batchTimeoutMillis = batchTimeoutMillis,
+        continueAfterBudget = continueAfterBudget,
         requestTimeoutMillis = requestTimeoutMillis,
         publishEvery = publishEvery,
         concurrency = concurrency,
@@ -767,13 +815,16 @@ internal suspend fun collectCompatImagePhashesConcurrently(
     fallbackImageUrl: ((String) -> String?)? = null,
     cachedImageLoader: coil3.ImageLoader? = null,
     onComputed: suspend (String, String) -> Unit,
-    onPublish: suspend () -> Unit
+    onPublish: suspend () -> Unit,
+    continueAfterBudget: Boolean = false
 ) {
     if (candidates.isEmpty()) return
     var sincePublish = 0
     val results = Channel<Pair<String, String>>(Channel.UNLIMITED)
     try {
-        withTimeoutOrNull(batchTimeoutMillis) {
+        // With [continueAfterBudget] (the catalogs' image NG) the budget only publishes what arrived so far; the rest
+        // keeps loading until done or until the caller is cancelled, so no cell is left unjudged.
+        withTimeoutOrNull(if (continueAfterBudget) Long.MAX_VALUE else batchTimeoutMillis) {
             coroutineScope {
                 val queue = Channel<Pair<String, String>>(Channel.UNLIMITED)
                 candidates.forEach { queue.trySend(it) }
@@ -795,13 +846,22 @@ internal suspend fun collectCompatImagePhashesConcurrently(
                     workers.joinAll()
                     results.close()
                 }
+                val budgetTimer = if (continueAfterBudget) launch {
+                    kotlinx.coroutines.delay(batchTimeoutMillis)
+                    results.trySend(COMPAT_PHASH_BUDGET_MARK to "")
+                } else null
                 for ((id, phash) in results) {
+                    if (id === COMPAT_PHASH_BUDGET_MARK) {
+                        if (sincePublish > 0) { sincePublish = 0; onPublish() }
+                        continue
+                    }
                     onComputed(id, phash)
                     if (++sincePublish >= publishEvery) {
                         sincePublish = 0
                         onPublish()
                     }
                 }
+                budgetTimer?.cancel()
             }
         }
     } finally {
@@ -810,6 +870,7 @@ internal suspend fun collectCompatImagePhashesConcurrently(
         withContext(NonCancellable) {
             while (true) {
                 val (id, phash) = results.tryReceive().getOrNull() ?: break
+                if (id === COMPAT_PHASH_BUDGET_MARK) continue
                 onComputed(id, phash)
                 sincePublish++
             }
@@ -913,7 +974,7 @@ internal fun resolveCompatPostPreviewUrl(
 internal fun resolveCompatCatalogPreviewUrl(
     item: CatalogItem,
     lowQuality: Boolean = false
-): String? = if (lowQuality) {
+): String? = if (lowQuality && !isAimogeNewsBoard(item.threadUrl)) {
     item.thumbnailUrl
         ?.replace("/thumb/", "/cat/")
         ?: item.fullImageUrl
@@ -1400,6 +1461,7 @@ private const val COMPAT_PHASH_CACHE_MAX_ENTRIES = 512
 private const val COMPAT_PHASH_REQUEST_TIMEOUT_MILLIS = 3_000L
 // Mobile links finished only 5-10 images per 15 s batch when fetched one by one.
 internal const val COMPAT_PHASH_FETCH_CONCURRENCY = 3
+private val COMPAT_PHASH_BUDGET_MARK = charArrayOf('\u0000').concatToString()
 private const val COMPAT_PHASH_BATCH_TIMEOUT_MILLIS = 15_000L
 private val compatPhashCacheMutex = Mutex()
 private val compatPhashCache = LinkedHashMap<String, String>()
@@ -1558,3 +1620,24 @@ internal fun compatViewerKeepsScreenOn(
     isCurrentPage: Boolean,
     state: com.valoser.futacha.shared.ui.board.VideoPlayerState
 ): Boolean = isCurrentPage && state == com.valoser.futacha.shared.ui.board.VideoPlayerState.Ready
+
+internal const val COMPAT_HIDE_NG_MEDIA_KEY = "compat.viewer.hideNgPostMedia"
+internal const val COMPAT_DRAWER_RETURN_AT_BOTTOM_KEY = "compat.control.drawerReturnAtBottom"
+
+internal suspend fun filterCompatNgMediaPosts(
+    posts: List<com.valoser.futacha.shared.compat.CompatPostSnapshot>,
+    enabled: Boolean,
+    rules: List<com.valoser.futacha.shared.compat.CompatNgRule>,
+    tab: com.valoser.futacha.shared.compat.CompatTab
+): List<com.valoser.futacha.shared.compat.CompatPostSnapshot> {
+    if (!enabled || rules.isEmpty()) return posts
+    val postRules = rules.filterNot {
+        it.kind == com.valoser.futacha.shared.compat.CompatNgKind.THREAD_IMAGE ||
+            it.kind == com.valoser.futacha.shared.compat.CompatNgKind.THREAD_IMAGE_PHASH
+    }
+    if (postRules.isEmpty()) return posts
+    return withContext(AppDispatchers.parsing) {
+        val index = com.valoser.futacha.shared.compat.buildCompatThreadNgRuleIndex(postRules, tab.key, tab.boardKey)
+        com.valoser.futacha.shared.compat.filterCompatThreadPosts(posts, true, index)
+    }
+}

@@ -80,6 +80,13 @@ internal suspend fun registerFutachaImageNgRule(
     // is fetched, so a failure is reported as such and nothing is fetched or written.
     if (localOnly) prepareBoardScope?.invoke()
     val hash = fetchHash()
+    // A catalog picture's own cell is hidden at once: its hash is stored under the catalog's cache key (the same URL the
+    // catalog hashes) before the rule is written, so the catalog finds it without fetching the picture again.
+    if (source == CompatImageNgSource.CATALOG && imageUrl.isNotBlank()) {
+        com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation {
+            store.saveImagePhashes(mapOf(com.valoser.futacha.shared.compat.compatImagePhashCachePreferenceKey(imageUrl) to hash))
+        }
+    }
     check(store.upsertNgRule(CompatNgRule(compatNgRuleId(kind, targetScope, hash), kind,
         targetScope, hash, Clock.System.now().toEpochMilliseconds(), imageUrl, memo.take(300)))) {
         "適用先が削除されたため登録できませんでした"

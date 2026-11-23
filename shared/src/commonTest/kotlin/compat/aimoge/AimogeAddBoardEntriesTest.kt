@@ -99,7 +99,7 @@ class AimogeAddBoardEntriesTest {
 
     @Test
     fun theListEntriesAreGone() {
-        assertEquals(listOf("板一覧", "新規追加", "並び替え", "削除", "保存済みスレッド", "設定", "ヘルプ"), compatMainOverflowLabels())
+        assertEquals(listOf("板一覧", "新規追加", "URLから開く", "並び替え", "削除", "保存済みスレッド", "設定", "ヘルプ"), compatMainOverflowLabels())
         assertEquals(listOf(FutaberDrawerEditExtra.BulkAdd, FutaberDrawerEditExtra.Rename), futaberBoardDrawerEditExtras(true, true))
     }
 

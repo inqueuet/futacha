@@ -64,9 +64,10 @@ internal data class FutaberCatalogFineTune(
     val gridTitleChars: Int? = null
 ) {
     companion object {
-        /** Nothing while the extension is off; a missing, damaged or out-of-range value reads as the default. */
+        /** Nothing while the extension is switched off (unset is on); a missing, damaged or out-of-range value reads as the default. */
         fun from(preferences: Map<String, String>): FutaberCatalogFineTune {
-            if (preferences[FutaberSettingKeys.EXT_CATALOG_FINE_TUNE] != "ON") return FutaberCatalogFineTune()
+            // Unset reads as on, like the settings screen that offers the rows (F-B1 defaults).
+            if (preferences[FutaberSettingKeys.EXT_CATALOG_FINE_TUNE] == "OFF") return FutaberCatalogFineTune()
             return FutaberCatalogFineTune(
                 gridColumns = futaberGridStyles.mapNotNull { style ->
                     preferences[FutaberCatalogFineKeys.gridColumns(style)]?.toIntOrNull()

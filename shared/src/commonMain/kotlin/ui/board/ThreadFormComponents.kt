@@ -56,7 +56,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.analytics.analyticsTextLengthBucket
 import com.valoser.futacha.shared.model.ThreadBodyTextSize
@@ -293,7 +292,7 @@ internal fun ThreadFormDialog(
 
     FutachaAppLockAwareWindow { Dialog(
         onDismissRequest = dismissAfterUpload,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        properties = threadFormDialogProperties()
     ) {
         ProvideThreadTextSizeTypography(bodyTextSize) {
         Surface(
@@ -303,7 +302,9 @@ internal fun ThreadFormDialog(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
+                    .then(if (threadFormPadsSystemBars) Modifier.navigationBarsPadding() else Modifier)
                     .imePadding()
+                    .testTag("thread-form-content")
             ) {
                 TopAppBar(
                     title = {

@@ -764,6 +764,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun Intent.futabaThreadDeepLinkOrNull(): String? {
+        if (action == Intent.ACTION_SEND) return sharedThreadTextOrNull()
         val raw = dataString.boundedPlatformDeepLinkOrNull() ?: return null
         val uri = data ?: return null
         if (uri.scheme !in setOf("http", "https")) return null
@@ -784,7 +785,27 @@ class MainActivity : ComponentActivity() {
         return raw
     }
 
+    /** A shared text (a browser's share) opens the first thread address in it; other text is refused (may 1449258130). */
+    private fun Intent.sharedThreadTextOrNull(): String? {
+        if (type?.startsWith("text/plain") != true) return null
+        val text = getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString().orEmpty()
+        val url = com.valoser.futacha.shared.ui.InAppThreadLinks.firstIn(text)?.boundedPlatformDeepLinkOrNull()
+        if (url == null) {
+            android.widget.Toast.makeText(this@MainActivity, SHARED_TEXT_NOT_A_THREAD, android.widget.Toast.LENGTH_LONG).show()
+            return null
+        }
+        if (com.valoser.futacha.shared.compat.aimogeIncomingLinkOf(url) ==
+            com.valoser.futacha.shared.compat.AimogeIncomingLink.UNAVAILABLE) {
+            android.widget.Toast.makeText(
+                this@MainActivity, com.valoser.futacha.shared.compat.AIMOGE_UNAVAILABLE_MESSAGE, android.widget.Toast.LENGTH_LONG
+            ).show()
+            return null
+        }
+        return url
+    }
+
     private companion object {
+        const val SHARED_TEXT_NOT_A_THREAD = "共有された文字にスレッドのURLがありません"
         fun profileSwitchFailureMessage(error: Throwable, rolledBack: Boolean): String =
             com.valoser.futacha.shared.compat.modeSwitchFailureMessage(error, rolledBack)
 

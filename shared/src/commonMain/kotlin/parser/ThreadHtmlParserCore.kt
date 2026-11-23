@@ -88,6 +88,11 @@ internal object ThreadHtmlParserCore {
         pattern = "<span(?=[^>]{0,500}(?:id=['\"]?contdisp['\"]?|class=['\"]?cntd['\"]?))[^>]{0,500}>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
+    // may 1449244111: Futaba marks a thread about to fall with a red bold 「このスレは古いので、もうすぐ消えます。」.
+    private val expiringSoonRegex = Regex(
+        pattern = "<font[^>]{0,200}><b>[^<]{0,80}もうすぐ消えます[^<]{0,20}</b></font>",
+        options = setOf(RegexOption.IGNORE_CASE)
+    )
     private val deletedNoticeRegex = Regex(
         pattern = "<span\\s+id=['\"]?ddel['\"]?>",
         options = setOf(RegexOption.IGNORE_CASE)
@@ -261,9 +266,13 @@ internal object ThreadHtmlParserCore {
             val boardTitle = extractBetween(normalized, boardTitleRegex, spanEndRegex)
                 ?.let(::stripTags)
                 ?.trim()
-            val expiresAt = extractBetween(normalized, expireRegex, spanEndRegex)
-                ?.let(::stripTags)
-                ?.trim()
+            val expiresAt = if (expiringSoonRegex.containsMatchIn(normalized)) {
+                FUTABA_EXPIRING_SOON_LABEL
+            } else {
+                extractBetween(normalized, expireRegex, spanEndRegex)
+                    ?.let(::stripTags)
+                    ?.trim()
+            }
             val deletedNotice = extractBetween(normalized, deletedNoticeRegex, brEndRegex)
                 ?.let(::stripTags)
                 ?.replace(whitespaceRegex, "")
@@ -692,3 +701,6 @@ internal object ThreadHtmlParserCore {
         )
     }
 }
+
+/** The short label shown instead of the time when Futaba says the thread is about to fall (as あいもげ does). */
+internal const val FUTABA_EXPIRING_SOON_LABEL = "もうすぐ消えます"

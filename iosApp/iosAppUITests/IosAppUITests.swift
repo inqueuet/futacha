@@ -2351,7 +2351,7 @@ final class IosAppUITests: XCTestCase {
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15))
         app.buttons["メニュー"].tap()
         app.staticTexts["設定"].firstMatch.tap()
-        app.staticTexts["モード"].firstMatch.tap()
+        app.staticTexts["モードの切り替え"].firstMatch.tap()
         app.staticTexts["としあき(仮)モード"].firstMatch.tap()
         app.buttons["切り替える"].tap()
         return app
@@ -5587,7 +5587,7 @@ final class IosAppUITests: XCTestCase {
         // The display choice lives inside the collapsible 表示 group.
         app.staticTexts["表示"].firstMatch.tap()
         XCTAssertTrue(app.descendants(matching: .any)["thread-display-quick-setting"].exists)
-        app.staticTexts["モード"].firstMatch.tap()
+        app.staticTexts["モードの切り替え"].firstMatch.tap()
         app.staticTexts["としあき(仮)モード"].firstMatch.tap()
         app.buttons["切り替える"].tap()
         let board = compatibilityBoardCardAfterUnwinding(in: app)
@@ -5631,7 +5631,7 @@ final class IosAppUITests: XCTestCase {
         // test has already bootstrapped an empty compatibility board list.
         app.buttons["メニュー"].tap()
         app.staticTexts["設定"].firstMatch.tap()
-        app.staticTexts["モード"].firstMatch.tap()
+        app.staticTexts["モードの切り替え"].firstMatch.tap()
         app.staticTexts["としあき(仮)モード"].firstMatch.tap()
         app.buttons["切り替える"].tap()
         let board = compatibilityBoardCardAfterUnwinding(in: app)
@@ -6680,9 +6680,23 @@ final class IosAppUITests: XCTestCase {
         assertPostToolbarAboveKeyboard(send, keyboard: keyboard)
         let name = app.descendants(matching: .any).matching(identifier: "compat-post-name-field").firstMatch
         XCTAssertTrue(name.exists)
+        // The form now ends above the bar and the keyboard: scroll the name field into view.
+        for _ in 0..<4 where !name.isHittable { comment.swipeUp() }
         name.tap()
         name.typeText("Name")
         assertPostToolbarAboveKeyboard(send, keyboard: keyboard)
+        // A long comment keeps its caret above the bar (it hid under it from line 18).
+        comment.tap()
+        comment.typeText((1...30).map { "\nL\($0)" }.joined())
+        Thread.sleep(forTimeInterval: 1)
+        let longEvidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        longEvidence.name = "compat-post-long-comment"
+        longEvidence.lifetime = .keepAlways
+        add(longEvidence)
+        let lastLine = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "L30")).firstMatch
+        let commentBottom = lastLine.exists ? lastLine.frame.maxY : comment.frame.maxY
+        XCTAssertLessThanOrEqual(min(commentBottom, comment.frame.maxY), send.frame.minY + 8,
+                                 "The last line of the comment went under the bar.")
         app.buttons["戻る"].firstMatch.tap()
         XCTAssertTrue((build ? app.otherElements["compat-catalog-grid"] : app.otherElements["compat-thread-pager"])
             .waitForExistence(timeout: 10))
@@ -7374,7 +7388,7 @@ final class IosAppUITests: XCTestCase {
         add(screenshot)
         app.buttons["戻る"].firstMatch.tap()
         XCTAssertFalse(app.staticTexts["共通の詳細設定"].firstMatch.exists)
-        XCTAssertTrue(app.staticTexts["モード"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["モードの切り替え"].firstMatch.waitForExistence(timeout: 10))
         let display = app.staticTexts["表示"].firstMatch
         for _ in 0..<6 where !display.isHittable { app.swipeUp() }
         XCTAssertTrue(display.isHittable)
@@ -7408,7 +7422,7 @@ final class IosAppUITests: XCTestCase {
         let settings = app.staticTexts["設定"].firstMatch
         XCTAssertTrue(settings.waitForExistence(timeout: 5), "The board-list settings command is missing.")
         settings.tap()
-        let mode = app.staticTexts["モード"].firstMatch
+        let mode = app.staticTexts["モードの切り替え"].firstMatch
         XCTAssertTrue(mode.waitForExistence(timeout: 10), "Global Settings did not expose the profile mode section.")
         mode.tap()
         let compatibility = app.staticTexts["としあき(仮)モード"].firstMatch
@@ -7618,7 +7632,7 @@ final class IosAppUITests: XCTestCase {
         func switchToToshiaki(_ step: String) {
             app.buttons["メニュー"].tap()
             app.staticTexts["設定"].firstMatch.tap()
-            app.staticTexts["モード"].firstMatch.tap()
+            app.staticTexts["モードの切り替え"].firstMatch.tap()
             app.staticTexts["としあき(仮)モード"].firstMatch.tap()
             app.buttons["切り替える"].tap()
             XCTAssertTrue(compatibilityBoardCardAfterUnwinding(in: app).waitForExistence(timeout: 20),
@@ -7682,7 +7696,7 @@ final class IosAppUITests: XCTestCase {
         let settings = app.staticTexts["設定"].firstMatch
         XCTAssertTrue(settings.waitForExistence(timeout: 5))
         settings.tap()
-        let mode = app.staticTexts["モード"].firstMatch
+        let mode = app.staticTexts["モードの切り替え"].firstMatch
         XCTAssertTrue(mode.waitForExistence(timeout: 10))
         mode.tap()
         XCTAssertTrue(app.staticTexts["としあき(仮)モード"].firstMatch.waitForExistence(timeout: 10))

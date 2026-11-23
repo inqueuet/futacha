@@ -451,7 +451,8 @@ internal fun FtutterArchiveSearchSheet(
                             ) {
                                 CatalogPreviewImage(
                                     thumbnailUrl = item.thumbUrl?.takeIf { it.isNotBlank() }, fullImageUrl = null, targetSizePx = 150,
-                                    contentDescription = "", modifier = Modifier.size(46.dp), fallbackTint = colors.headerText
+                                    contentDescription = "", modifier = Modifier.size(46.dp), fallbackTint = colors.headerText,
+                                    rewriteThumbnailPath = !com.valoser.futacha.shared.compat.isAimogeNewsBoard(item.htmlUrl)
                                 )
                                 Column(Modifier.weight(1f).padding(start = 10.dp)) {
                                     Text(

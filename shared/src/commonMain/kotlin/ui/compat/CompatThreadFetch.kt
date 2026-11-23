@@ -83,6 +83,8 @@ internal fun isCompatThreadGoneFailure(failure: Throwable?): Boolean {
  * Cancellation is never converted into a fallback request: leaving a screen must stop all
  * network work immediately.
  */
+internal const val COMPAT_CACHE_FETCH_TIMEOUT_MILLIS = 4_000L
+
 internal suspend fun loadCompatThreadWithFallback(
     sourceUrl: String,
     cacheEnabled: Boolean,
@@ -108,7 +110,11 @@ internal suspend fun loadCompatThreadWithFallback(
     }
     val cacheResult: Result<ThreadPage>? = cacheUrl
         ?.takeIf { it != sourceUrl }
-        ?.let { url -> attempt(url) }
+        // A slow cache server must not hold the screen on "キャッシュサーバから読み込んでいます" until the whole
+        // load times out: give it the same 4 s as the shared repository, then read the live board (may 1449261335).
+        ?.let { url -> withTimeoutOrNull(COMPAT_CACHE_FETCH_TIMEOUT_MILLIS) { attempt(url) } ?: Result.failure(
+            IllegalStateException("キャッシュサーバーの応答がありません")
+        ) }
     val cachedPage = cacheResult?.getOrNull()
     // A cache copy behind the count the catalog shows is stale: ask the live board as well and keep the
     // longer one. Before, the stale copy was used every time and the thread never got its new replies

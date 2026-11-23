@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.compat.isAimogeNewsBoard
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.background
@@ -72,8 +73,10 @@ internal fun CatalogCard(
     ).let { futachaCatalogSourceTitle(it, item, LocalFutachaCatalogSourceTitleLimit.current) }
 
     val onLongPress = LocalFutachaCatalogLongPress.current
+    val readLook = futachaCatalogReadLook(item.id)
     ElevatedCard(
         modifier = modifier
+            .then(readLook.modifier)
             .fillMaxWidth()
             .border(
                 border = BorderStroke(
@@ -89,7 +92,7 @@ internal fun CatalogCard(
             )
             onClick()
         }),
-        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)
+        colors = CardDefaults.elevatedCardColors(containerColor = readLook.container)
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Box(
@@ -109,6 +112,7 @@ internal fun CatalogCard(
                     CatalogPreviewImage(
                         thumbnailUrl = item.thumbnailUrl,
                         fullImageUrl = item.fullImageUrl,
+                        rewriteThumbnailPath = !isAimogeNewsBoard(item.threadUrl),
                         targetSizePx = targetSizePx,
                         contentDescription = displayTitle,
                         modifier = Modifier.fillMaxSize(),
@@ -189,8 +193,9 @@ internal fun CatalogListItem(
     ).let { futachaCatalogSourceTitle(it, item, LocalFutachaCatalogSourceTitleLimit.current) }
 
     val onLongPress = LocalFutachaCatalogLongPress.current
+    val readLook = futachaCatalogReadLook(item.id)
     ElevatedCard(
-        modifier = modifier.fillMaxWidth().heightIn(min = minimumRowHeight).combinedClickable(onLongClick = onLongPress?.let { { it(item) } }, onClick = {
+        modifier = modifier.then(readLook.modifier).fillMaxWidth().heightIn(min = minimumRowHeight).combinedClickable(onLongClick = onLongPress?.let { { it(item) } }, onClick = {
             AnalyticsTracker.uiControl(
                 "catalog_card",
                 "カタログのリストカードを開く",
@@ -198,7 +203,7 @@ internal fun CatalogListItem(
             )
             onClick()
         }),
-        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)
+        colors = CardDefaults.elevatedCardColors(containerColor = readLook.container)
     ) {
         Row(
             modifier = Modifier
@@ -223,6 +228,7 @@ internal fun CatalogListItem(
                     CatalogPreviewImage(
                         thumbnailUrl = item.thumbnailUrl,
                         fullImageUrl = item.fullImageUrl,
+                        rewriteThumbnailPath = !isAimogeNewsBoard(item.threadUrl),
                         targetSizePx = targetSizePx,
                         contentDescription = displayTitle,
                         modifier = Modifier.fillMaxSize(),

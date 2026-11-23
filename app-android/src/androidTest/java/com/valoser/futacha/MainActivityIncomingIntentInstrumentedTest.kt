@@ -138,4 +138,17 @@ class MainActivityIncomingIntentInstrumentedTest {
             .setClass(target, MainActivity::class.java))
         assertNull("The old link is not pending again", pendingAtCreate.get())
     }
+
+    /** may 1449244111 G: a shared text holding a thread address opens that thread; other text opens nothing. */
+    @Test fun aSharedTextWithAThreadAddressOpensIt() {
+        launch(Intent(Intent.ACTION_SEND).setClass(target, MainActivity::class.java).setType("text/plain")
+            .putExtra(Intent.EXTRA_TEXT, "見て https://may.2chan.net/b/res/1449244111.htm"))
+        assertTrue("pending ${pendingAtCreate.get()}", pendingAtCreate.get() == "https://may.2chan.net/b/res/1449244111.htm")
+    }
+
+    @Test fun aSharedTextWithoutAThreadAddressOpensNothing() {
+        launch(Intent(Intent.ACTION_SEND).setClass(target, MainActivity::class.java).setType("text/plain")
+            .putExtra(Intent.EXTRA_TEXT, "ただの文字"))
+        assertNull("nothing pending", pendingAtCreate.get())
+    }
 }

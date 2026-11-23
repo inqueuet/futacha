@@ -61,6 +61,13 @@ class AimogeExtraAttachmentsTest {
         assertEquals(emptyList(), futaba.extraAttachments)
     }
 
+    @Test fun thumbnailOnlyPlanPreservesEveryThumbnailAndSkipsAllOriginals() {
+        val post = aimogePost.copy(imageUrl = null)
+        val plan = buildThreadSaveMediaDownloadPlan(listOf(post), 3, downloadFullMedia = false)
+        assertEquals(three.map { it.thumbnailUrl }, plan.scheduledItems.map { it.url })
+        assertEquals(List(3) { ThreadSaveMediaRequestType.THUMBNAIL }, plan.scheduledItems.map { it.requestType })
+    }
+
     @Test fun aSavedCopyOpensWithAllThreeFilesAndAFutabaCopyWithNone() {
         val files = buildThreadSaveMediaDownloadPlan(listOf(aimogePost), 100).scheduledItems.associate { item ->
             buildThreadSaveMediaDownloadKey(item.url, item.requestType) to ThreadSaveLocalFileInfo(

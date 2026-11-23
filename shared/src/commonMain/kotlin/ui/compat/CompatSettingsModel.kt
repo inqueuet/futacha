@@ -338,7 +338,7 @@ internal fun compatRootSettingsGroups(appVersion: String): List<Pair<String, Lis
         CompatSettingEntry("あいもげのイベントカレンダー", "全板の予定・開催スレ", preferenceKey = COMPAT_AIMOGE_CALENDAR_KEY)
             .takeIf { com.valoser.futacha.shared.ui.aimoge.aimogeEventCalendarAvailable() },
         CompatSettingEntry("AI・補助機能", "スレ要約・荒らし非表示", "ai"),
-        CompatSettingEntry("モード", "現在の表示モード", preferenceKey = "mode"),
+        CompatSettingEntry("モードの切り替え", "現在の表示モード", preferenceKey = "mode"),
         CompatSettingEntry(
             "アップデート確認",
             "起動時に最新リリースを確認します",
@@ -415,7 +415,7 @@ internal fun compatPreferenceOptions(path: String, entry: CompatSettingEntry): L
         key == "autoScrollPixel" -> (1..30).map(Int::toString)
         key == "autoScrollSpeed" -> ((10..100 step 5) + listOf(150, 200)).map(Int::toString)
         key == "threadHeaderSoudaneDisplay" ->
-            listOf("通常", "通常(右寄せ)", "シンプル", "シンプル(右寄せ)", "非表示")
+            listOf("通常", "通常(右寄せ)", "シンプル", "シンプル(右寄せ)", COMPAT_SAIDANE_NONZERO_LABEL, COMPAT_SAIDANE_NONZERO_RIGHT_LABEL, "非表示")
         key == "threadFontSize" -> (10..30).map(Int::toString)
         key == "threadHeaderFontSize" -> listOf("標準") + (8..16).map(Int::toString)
         key == "threadTitleFontSize" -> listOf("標準") + (12..20).map(Int::toString)
@@ -428,16 +428,31 @@ internal fun compatPreferenceOptions(path: String, entry: CompatSettingEntry): L
         key == "threadExtractQuoteNum" -> (2..10).map(Int::toString)
         key == "threadImageNgPhashThreshold" -> (0..16).map(Int::toString)
         key == "viewerPreloadMode" -> listOf("常に利用する", "Wi-Fi回線のみ", "利用しない")
+        key == COMPAT_VIEWER_VIDEO_END_KEY -> COMPAT_VIEWER_VIDEO_END_OPTIONS
         key == COMPAT_THREAD_CONTEXT_MENU_SCALE_KEY -> COMPAT_THREAD_CONTEXT_MENU_SCALE_OPTIONS
         key == HIGH_QUALITY_THUMBNAIL_PREFERENCE_KEY -> HighQualityThumbnailMode.entries.map { it.label }
         else -> emptyList()
     }
 }
 
+/** ふたちゃ catalog: show the "+N" new-replies mark (default ON, the current look). */
+internal const val FUTACHA_CATALOG_NEW_REPLIES_BADGE_KEY = "futachaCatalogNewRepliesBadge"
+/** ふたちゃ catalog: tint the threads already read (default OFF). */
+internal const val FUTACHA_CATALOG_READ_COLOR_KEY = "futachaCatalogReadColor"
+private val FUTACHA_ONLY_CATALOG_KEYS = setOf(FUTACHA_CATALOG_NEW_REPLIES_BADGE_KEY, FUTACHA_CATALOG_READ_COLOR_KEY)
+
+/** そうだね display that hides only 0件 and keeps the rest as 通常 (may 1449174385). */
+internal const val COMPAT_SAIDANE_NONZERO_LABEL = "0件だけ隠す（他は通常）"
+
+/** The right-aligned 0件だけ隠す for ふたちゃ; としあき(仮) reads it as 通常 (its label does not end with "(右寄せ)"). */
+internal const val COMPAT_SAIDANE_NONZERO_RIGHT_LABEL = "0件だけ隠す（他は通常・右寄せ）"
+
 internal fun compatPreferenceDialogTitle(entry: CompatSettingEntry): String =
     when (entry.preferenceKey) {
         "backgroundThreadExistCheck", "backgroundThreadUpdateCheck", "viewerPreloadMode" -> "選択"
         "catalogTitleLength" -> "スレッド文の長さ"
+        // may 1449174385: シンプル is the count alone and hides 0件 (the bare "+").
+        "threadHeaderSoudaneDisplay" -> "${entry.title}（シンプル＝数字だけ・0件は隠す）"
         else -> entry.title
     }
 
@@ -633,6 +648,8 @@ internal fun compatPreferenceStoredValue(preferenceKey: String, displayedValue: 
             "通常(右寄せ)" -> "show|right"
             "シンプル" -> "simple"
             "シンプル(右寄せ)" -> "simple|right"
+            COMPAT_SAIDANE_NONZERO_LABEL -> "nonzero"
+            COMPAT_SAIDANE_NONZERO_RIGHT_LABEL -> "nonzero|right"
             "非表示" -> "hide"
             else -> displayedValue
         }
@@ -643,6 +660,7 @@ internal fun compatPreferenceStoredValue(preferenceKey: String, displayedValue: 
             "Wi-Fi回線のみ先読み" -> "wifi"
             else -> displayedValue
         }
+        COMPAT_VIEWER_VIDEO_END_KEY -> compatViewerVideoEndStored(displayedValue)
         "viewerPreloadMode" -> when (displayedValue.lowercase()) {
             "常に利用する", "usually" -> "usually"
             "wi-fi回線のみ", "wifi" -> "wifi"
@@ -741,6 +759,8 @@ internal fun compatPreferenceDisplayValue(preferenceKey: String, storedValue: St
             "show|right" -> "通常(右寄せ)"
             "simple" -> "シンプル"
             "simple|right" -> "シンプル(右寄せ)"
+            "nonzero" -> COMPAT_SAIDANE_NONZERO_LABEL
+            "nonzero|right" -> COMPAT_SAIDANE_NONZERO_RIGHT_LABEL
             "hide", "none" -> "非表示"
             else -> storedValue
         }
@@ -751,6 +771,7 @@ internal fun compatPreferenceDisplayValue(preferenceKey: String, storedValue: St
             "wifi" -> "Wi-Fi回線のみ先読み"
             else -> storedValue
         }
+        COMPAT_VIEWER_VIDEO_END_KEY -> compatViewerVideoEndLabel(storedValue)
         "viewerPreloadMode" -> when (storedValue.lowercase()) {
             "usually", "always", "常に利用する" -> "常に利用する"
             "wifi", "wi-fi回線のみ" -> "Wi-Fi回線のみ"
@@ -999,6 +1020,8 @@ internal fun String.compatSettingsEntries(): List<CompatSettingEntry> = when (th
         CompatSettingEntry("カタログを開いた時リロードを行う", "OFF", preferenceKey = "catalogOpenWithReload"),
         CompatSettingEntry("板一覧から開いた時だけ更新して先頭へ", "OFF", preferenceKey = COMPAT_CATALOG_ENTRY_REFRESH_KEY),
         CompatSettingEntry("スレッドを開いた時に更新", "ON", preferenceKey = "catalogThreadOpenWithReload"),
+        CompatSettingEntry("新着レス数（+N）を表示", "ON", preferenceKey = FUTACHA_CATALOG_NEW_REPLIES_BADGE_KEY),
+        CompatSettingEntry("既読のスレに色を付ける", "OFF", preferenceKey = FUTACHA_CATALOG_READ_COLOR_KEY),
         CompatSettingEntry(
             "リロード後に先頭へ戻る",
             "OFF",
@@ -1049,7 +1072,8 @@ internal fun String.compatSettingsEntries(): List<CompatSettingEntry> = when (th
         CompatSettingEntry("前後の画像を先読みする", "常に利用する", preferenceKey = "viewerPreloadMode"),
         CompatSettingEntry("タップでツールバーを表示／非表示", "ON", preferenceKey = COMPAT_VIEWER_TAP_TOOLBAR_KEY),
         CompatSettingEntry("動画の操作パネルを自動で隠す", "OFF", preferenceKey = COMPAT_VIEWER_VIDEO_AUTO_HIDE_KEY),
-        CompatSettingEntry("動画の自動再生", "OFF", preferenceKey = COMPAT_VIEWER_VIDEO_AUTO_PLAY_KEY)
+        CompatSettingEntry("動画の自動再生", "OFF", preferenceKey = COMPAT_VIEWER_VIDEO_AUTO_PLAY_KEY),
+        CompatSettingEntry("動画を最後まで再生したら", COMPAT_VIEWER_VIDEO_END_DEFAULT_LABEL, preferenceKey = COMPAT_VIEWER_VIDEO_END_KEY)
     )
     "ptmt" -> listOf(CompatSettingEntry("ptmt値", "値は表示・ログ送信しません"), CompatSettingEntry("誤操作防止", "「後悔しません」の入力が必要"))
     else -> emptyList()
@@ -1066,7 +1090,7 @@ private fun List<CompatSettingEntry>.compatKeys(vararg keys: String): List<Compa
  */
 internal fun compatSettingsGroups(path: String, modernPresentation: Boolean = false): List<Pair<String, List<CompatSettingEntry>>> {
     val entries = path.compatSettingsEntries().filterNot {
-        modernPresentation && (
+        (!modernPresentation && it.preferenceKey in FUTACHA_ONLY_CATALOG_KEYS) || modernPresentation && (
             (path == "design" && it.preferenceKey in setOf("designTheme", "designTextColor", "designNavigationBar")) ||
                 (path == "thread" && it.preferenceKey == COMPAT_THREAD_DISPLAY_MODE_KEY)
             )
@@ -1129,8 +1153,10 @@ internal fun compatSettingsGroups(path: String, modernPresentation: Boolean = fa
             "読み込み" to entries.compatKeys(
                 "catalogOpenWithReload", COMPAT_CATALOG_ENTRY_REFRESH_KEY, "catalogThreadOpenWithReload", "catalogReloadScrollTop", "catalogThreadSize",
                 "catalogFindThreadDeleted", "catalogAppendDropped", "catalogTitleLength"
-            )
-        )
+            ),
+            // ふたちゃ only (may 1449174385); としあき(仮)'s page never shows this section.
+            "ふたちゃ拡張" to entries.compatKeys(FUTACHA_CATALOG_NEW_REPLIES_BADGE_KEY, FUTACHA_CATALOG_READ_COLOR_KEY)
+        ).filter { it.second.isNotEmpty() }
         "thread" -> listOf(
             "全般" to entries.compatKeys(
                 "threadPullToRefresh", "threadFastScroll", "autoScrollPixel", "autoScrollSpeed", "threadNg"
@@ -1146,7 +1172,7 @@ internal fun compatSettingsGroups(path: String, modernPresentation: Boolean = fa
             "一覧" to entries.compatKeys("galleryGridViewPortraitClmNum", "galleryGridViewLandscapeClmNum"),
             "閲覧" to entries.compatKeys(
                 "viewerPreloadMode", COMPAT_VIEWER_TAP_TOOLBAR_KEY,
-                COMPAT_VIEWER_VIDEO_AUTO_HIDE_KEY, COMPAT_VIEWER_VIDEO_AUTO_PLAY_KEY
+                COMPAT_VIEWER_VIDEO_AUTO_HIDE_KEY, COMPAT_VIEWER_VIDEO_AUTO_PLAY_KEY, COMPAT_VIEWER_VIDEO_END_KEY
             )
         )
         "ptmt" -> listOf("ptmtクッキー" to entries)
@@ -1163,6 +1189,7 @@ internal fun compatIsBooleanPreference(path: String, entry: CompatSettingEntry):
         "catalogPullToRefresh", "catalogFastScroll", "catalogThumbCrop", "catalogEco",
         "catalogMobileEco", "catalogGridViewResCountOnThumb", "catalogOpenWithReload", COMPAT_CATALOG_ENTRY_REFRESH_KEY, "catalogThreadOpenWithReload",
         "catalogReloadScrollTop", "catalogFindThreadDeleted", "catalogAppendDropped",
+        FUTACHA_CATALOG_NEW_REPLIES_BADGE_KEY, FUTACHA_CATALOG_READ_COLOR_KEY,
         "threadPullToRefresh", "threadFastScroll", "threadNg",
         "threadHideDefaultNameAndSubject", "threadHeaderQuoteSimple",
         "viewerWebMSwitchMp4", COMPAT_VIEWER_TAP_TOOLBAR_KEY,

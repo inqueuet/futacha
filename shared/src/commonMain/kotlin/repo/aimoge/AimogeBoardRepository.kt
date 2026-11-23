@@ -202,7 +202,7 @@ class AimogeBoardRepository private constructor(
             seed = dto.seed ?: seed
             if (dto.pagination?.hasNextPage != true || dto.threads.isEmpty()) break
         }
-        val pairs = threads.distinctBy { it.id }.take(wanted).map { it to it.toCatalogItem(threadUrl(slug, it.id)) }
+        val pairs = threads.distinctBy { it.id }.take(wanted).map { it to it.toCatalogItem(threadUrl(slug, it.id), slug) }
         val created = HashMap<String, Long>()
         pairs.forEach { (dto, item) -> aimogeEpochMillis(dto.createdAt)?.let { created[item.id] = it } }
         val items = pairs.map { it.second }
@@ -217,7 +217,9 @@ class AimogeBoardRepository private constructor(
 
     /** From the copy at hand only; null when the thread was not read here. */
     override suspend fun fetchOpImageUrl(board: String, threadId: String): String? =
-        mutex.withLock { threads[threadId.trim().lowercase()] }?.page?.posts?.firstOrNull()?.imageUrl
+        mutex.withLock { threads[threadId.trim().lowercase()] }
+            ?.takeIf { aimogeBoardShapeOf(board) == "https://$AIMOGE_HOST/b/${it.slug}/" }
+            ?.page?.posts?.firstOrNull()?.imageUrl
 
     override suspend fun resolveCatalogDisplayTitle(board: String, item: CatalogItem, allowFallbackHeadScan: Boolean): String? = item.title
 
@@ -232,10 +234,10 @@ class AimogeBoardRepository private constructor(
         val slug = slugOf(board)
         val uuid = uuidOf(threadId)
         if (!isAutomaticFetch()) return readFull(slug, uuid)
-        val held = mutex.withLock { threads[uuid] }
+        val held = mutex.withLock { threads[uuid] }?.takeIf { it.slug == slug }
         val now = nowMillis()
         if (held != null && (pausedNow() || now - held.sentAtMillis < AUTOMATIC_GAP_MILLIS)) return held.page
-        if (held == null || held.slug != slug || now - held.fullAtMillis >= FULL_READ_AGE_MILLIS) return readFull(slug, uuid)
+        if (held == null || now - held.fullAtMillis >= FULL_READ_AGE_MILLIS) return readFull(slug, uuid)
         return readDelta(held, uuid)
     }
 
@@ -247,7 +249,7 @@ class AimogeBoardRepository private constructor(
         val body = api.thread(uuid, slug)
         val dto = decode { decodeAimogeThread(body) }
         val posts = withPollStates(slug, uuid, dto.posts)
-        val page = aimogeThreadPage(dto, posts, nowMillis())
+        val page = aimogeThreadPage(dto, posts, nowMillis(), slug)
         hold(uuid, Held(slug, dto.copy(posts = emptyList()), posts, null, sentAt, sentAt, page))
         return@withContext page
     }
@@ -279,7 +281,7 @@ class AimogeBoardRepository private constructor(
         }
         val posts = bySeq.values.filterNot { it.isUnavailableNew(held.maxSeq) }.sortedBy { it.seq }
         val archivedAt = aimogeEpochMillis(state.archivedAt) ?: held.archivedAtMillis
-        val base = aimogeThreadPage(held.thread, posts, nowMillis())
+        val base = aimogeThreadPage(held.thread, posts, nowMillis(), held.slug)
         val page = if (archivedAt != null && archivedAt <= nowMillis()) base.copy(archived = true) else base
         hold(uuid, Held(held.slug, held.thread, posts, archivedAt, held.fullAtMillis, sentAt, page))
         return@withContext page
@@ -504,7 +506,7 @@ class AimogeBoardRepository private constructor(
         }
         val snapshot = decode { decodeAimogeSnapshot(body) }
         val thread = snapshot.thread ?: return@withContext null
-        val page = aimogeThreadPage(thread, snapshot.posts, nowMillis()).copy(archived = true)
+        val page = aimogeThreadPage(thread, snapshot.posts, nowMillis(), slug).copy(archived = true)
         return@withContext ThreadPageContent(page = page)
     }
 

@@ -20,7 +20,22 @@ object InAppThreadLinks {
         val withScheme = if (text.startsWith("http://") || text.startsWith("https://")) text else "https://$text"
         val futaba = Regex("^https?://[a-z0-9]+\\.2chan\\.net/[^/]+/res/[0-9]+\\.htm/?(#.*)?$", RegexOption.IGNORE_CASE)
         val aimoge = Regex("^https?://nijiurachan\\.net/b/[^/]+/thread/[0-9a-f-]+/?(#.*)?$", RegexOption.IGNORE_CASE)
+        // The board's own `futaba.php?res=N` form opens the same page (its canonical link is /res/N.htm), so it is
+        // read as that page (may 1449258130).
+        val form = Regex("^(https?://[a-z0-9]+\\.2chan\\.net/[^/]+/)futaba\\.php\\?res=([0-9]+)(#.*)?$", RegexOption.IGNORE_CASE)
+        form.matchEntire(withScheme)?.let { match -> return "${match.groupValues[1]}res/${match.groupValues[2]}.htm" }
         return withScheme.takeIf { futaba.matches(it) || aimoge.matches(it) }
+    }
+
+    /**
+     * The first thread address in a shared text (a browser shares "title https://…"); null when there is none
+     * (may 1449258130).
+     */
+    fun firstIn(text: String): String? {
+        if (text.length > 16_384) return null
+        return Regex("(?:https?://)?(?:[A-Za-z0-9-]+\\.)*(?:2chan\\.net|nijiurachan\\.net)/[^\\s<>\"'）」』】]+")
+            .findAll(text)
+            .firstNotNullOfOrNull { normalized(it.value.trimEnd('.', ',', ')', '、', '。')) }
     }
 
     /** False when [raw] is not a thread address. */

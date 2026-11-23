@@ -159,7 +159,6 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.window.DialogProperties
 import coil3.compose.AsyncImage
-import coil3.compose.LocalPlatformContext
 import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
 import coil3.size.Size
@@ -274,6 +273,7 @@ internal fun CompatGalleryScreen(
     store: CompatibilityStore,
     preferences: Map<String, String>,
     ngRules: List<CompatNgRule>,
+    commonNgRules: List<CompatNgRule> = emptyList(),
     httpClient: HttpClient?,
     apngMarkerCache: CompatApngMarkerCache,
     fileSystem: FileSystem?,
@@ -355,7 +355,6 @@ internal fun CompatGalleryScreen(
     val showDeletedContent = preferences.compatPreferenceValue(
         "thread", "threadAdminDeleteShow", "削除されたレスを表示"
     ) == "ON"
-    val wifiConnected = isCompatWifiConnected(LocalPlatformContext.current)
     val threadPrivacyEnabled = preferences.compatPrivacyEnabled()
     val threadPrivacyAlpha = parseCompatPercent(
         preferences.compatPreferenceValue("thread", "commonPrivacyAlpha", "プライバシー透明度")
@@ -375,12 +374,15 @@ internal fun CompatGalleryScreen(
             message = "画像検索結果のURLが不正です"
         }
     }
+    val hideNgPostMedia = preferences[COMPAT_HIDE_NG_MEDIA_KEY] == "ON" &&
+        preferences.compatPreferenceValue("thread", "threadNg", "NG機能") != "OFF"
     LaunchedEffect(
         tabKey,
         preparedSnapshot,
         ngRules,
+        commonNgRules,
+        hideNgPostMedia,
         upsThumbnailMethod,
-        wifiConnected,
         imageNgPhashThreshold,
         imageNgPhashRules,
         httpClient,
@@ -389,7 +391,7 @@ internal fun CompatGalleryScreen(
         try {
             val hiddenImages = ngRules.asSequence()
                 .filter { it.kind == CompatNgKind.THREAD_IMAGE && it.appliesToThreadImage(tab.boardKey, tabKey) }
-                .mapTo(mutableSetOf(), CompatNgRule::normalizedValue)
+                .mapTo(mutableSetOf()) { normalizeCompatApuSmallMediaUrl(it.normalizedValue) }
             val snapshot = preparedSnapshot ?: store.loadThreadSnapshot(tabKey)?.let {
                 withContext(AppDispatchers.parsing) { normalizeCompatThreadSnapshot(it) }
             }
@@ -398,25 +400,12 @@ internal fun CompatGalleryScreen(
                 posts = snapshot?.posts.orEmpty(),
                 showDeletedContent = showDeletedContent
             )
-            // Open with the hashes that are already known and hide further
-            // pHash matches as their originals are hashed, instead of keeping
-            // the spinner up until up to 256 originals have been fetched.
-            collectCompatImagePhashHiddenPostNos(
-                httpClient = httpClient,
-                store = store,
-                posts = rawPosts,
-                rules = imageNgPhashRules,
-                threshold = imageNgPhashThreshold
-            ) { hiddenPostNos ->
-                posts = withContext(AppDispatchers.parsing) {
-                    compatViewerMediaPosts(
-                        posts = rawPosts,
-                        hiddenImages = hiddenImages,
-                        hiddenPostNos = hiddenPostNos,
-                        upsThumbnailMethod = upsThumbnailMethod,
-                        wifiConnected = wifiConnected
-                    )
-                }
+            val mediaPosts = filterCompatNgMediaPosts(rawPosts, hideNgPostMedia, ngRules + commonNgRules, tab)
+            collectCompatViewerMediaPosts(
+                httpClient, store, mediaPosts, hiddenImages, imageNgPhashRules,
+                imageNgPhashThreshold, upsThumbnailMethod
+            ) { visibleMedia ->
+                posts = visibleMedia
                 postsLoaded = true
             }
         } catch (cancelled: CancellationException) {

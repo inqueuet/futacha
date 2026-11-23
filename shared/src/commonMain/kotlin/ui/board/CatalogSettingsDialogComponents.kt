@@ -28,7 +28,7 @@ import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 
 private const val DIALOG_MIN_CATALOG_GRID_COLUMNS = 2
-private const val DIALOG_MAX_CATALOG_GRID_COLUMNS = 8
+private const val DIALOG_MAX_CATALOG_GRID_COLUMNS = 12
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
@@ -388,6 +388,8 @@ internal fun DisplayStyleDialog(
                 }
                 if (currentStyle == CatalogDisplayStyle.Grid && LocalFutachaSharedFeatures.current != null) {
                     SharedSettingsLink("catalog", "列数・文字・画像", "縦持ち・横持ちの列数を共通設定で変更")
+                    // The real app sets the columns on the shared page, so the note has to be here too.
+                    CatalogManyColumnsNote()
                 } else if (currentStyle == CatalogDisplayStyle.Grid) {
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
@@ -412,6 +414,7 @@ internal fun DisplayStyleDialog(
                             )
                         }
                     }
+                    CatalogManyColumnsNote()
                 }
             }
         },
@@ -424,4 +427,17 @@ internal fun DisplayStyleDialog(
             }
         }
     ) }
+}
+
+// Above 6 columns the titles are not completed from each thread's head (one request per cell would be too many).
+internal const val CATALOG_MANY_COLUMNS_NOTE = "7列以上では、カタログの題名をスレッドから補いません"
+
+@Composable
+private fun CatalogManyColumnsNote() {
+    Text(
+        text = CATALOG_MANY_COLUMNS_NOTE,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+    )
 }

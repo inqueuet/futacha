@@ -112,11 +112,22 @@ private suspend fun SavedThreadRepository.buildSavedThreadArchiveSourceFiles(
         post.localVideoPath
             ?.takeIf { it.isNotBlank() }
             ?.let { if (it !in files) files[it] = HistoryArchiveFileKind.VIDEO }
+        post.extraAttachments.forEach { attachment ->
+            attachment.localThumbnailPath?.takeIf { it.isNotBlank() }?.let {
+                if (it !in files) files[it] = HistoryArchiveFileKind.THUMBNAIL
+            }
+            attachment.localPath?.takeIf { it.isNotBlank() }?.let {
+                val kind = if (com.valoser.futacha.shared.media.classifyFutabaMedia(it) ==
+                    com.valoser.futacha.shared.media.FutabaMediaKind.VIDEO
+                ) HistoryArchiveFileKind.VIDEO else HistoryArchiveFileKind.IMAGE
+                if (it !in files) files[it] = kind
+            }
+        }
     }
     var missingExpectedFileCount = 0
     val sourceFiles = files.mapNotNull { (relativePath, kind) ->
         val sourceRelativePath = "$storageId/$relativePath"
-        if (!existsAt(sourceRelativePath)) {
+        if (!isSafeHistoryArchiveRelativePath(relativePath) || !existsAt(sourceRelativePath)) {
             missingExpectedFileCount += 1
             return@mapNotNull null
         }

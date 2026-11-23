@@ -77,7 +77,8 @@ internal fun CatalogScreenScaffold(
                     onSearchActiveChange = bindings.topBarCallbacks.onSearchActiveChange,
                     onNavigationClick = bindings.topBarCallbacks.onNavigationClick,
                     onModeSelected = bindings.topBarCallbacks.onModeSelected,
-                    onMenuAction = bindings.topBarCallbacks.onMenuAction
+                    onMenuAction = bindings.topBarCallbacks.onMenuAction,
+                    compact = bindings.compactBars
                 )
             },
             bottomBar = {
@@ -85,7 +86,8 @@ internal fun CatalogScreenScaffold(
                 CatalogNavigationBar(
                     menuEntries = bindings.catalogNavEntries,
                     onNavigate = bindings.navigationCallbacks.onNavigate,
-                    isRefreshing = bindings.isRefreshing
+                    isRefreshing = bindings.isRefreshing,
+                    compact = bindings.compactBars
                 )
                 }
             }

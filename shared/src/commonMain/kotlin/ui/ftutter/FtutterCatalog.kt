@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.ftutter
 
+import com.valoser.futacha.shared.compat.isAimogeNewsBoard
 import com.valoser.futacha.shared.ui.FutachaAppLockAwareWindow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -1100,6 +1101,7 @@ private fun FtutterCatalogCell(
             FtutterThumbnail(
                 thumbnailUrl = item.thumbnailUrl,
                 fullImageUrl = item.fullImageUrl,
+                rewriteThumbnailPath = !isAimogeNewsBoard(item.threadUrl),
                 quality = settings.highRes.ordinal, catalog = true,
                 targetSizePx = targetSizePx,
                 contentDescription = title,

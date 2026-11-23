@@ -17,7 +17,8 @@ internal enum class FutachaPageSaveMode(val label: String) {
 
 internal fun ThreadPage.postsForFutachaSave(mode: FutachaPageSaveMode) = posts.map { post ->
     post.copy(imageUrl = post.imageUrl.takeIf { mode == FutachaPageSaveMode.ALL },
-        thumbnailUrl = post.thumbnailUrl.takeIf { mode != FutachaPageSaveMode.HTML })
+        thumbnailUrl = post.thumbnailUrl.takeIf { mode != FutachaPageSaveMode.HTML },
+        attachments = post.attachments.takeIf { mode != FutachaPageSaveMode.HTML }.orEmpty())
 }
 
 @Composable
@@ -55,7 +56,10 @@ internal fun FutachaPageSaveDialog(features: FutachaSharedFeatures, page: Thread
                             truncationReason = page.truncationReason, baseSaveLocation = location,
                             baseDirectory = MANUAL_SAVE_DIRECTORY, writeMetadata = true,
                             rawHtmlOptions = RawHtmlSaveOptions(enable = true, stripExternalResources = true),
-                            limits = ThreadSaveLimits(maxMediaItems = if (mode == FutachaPageSaveMode.HTML) 0 else ThreadSaveService.DEFAULT_MAX_MEDIA_ITEMS),
+                            limits = ThreadSaveLimits(
+                                maxMediaItems = if (mode == FutachaPageSaveMode.HTML) 0 else ThreadSaveService.DEFAULT_MAX_MEDIA_ITEMS,
+                                downloadFullMedia = mode == FutachaPageSaveMode.ALL
+                            ),
                             storageOptions = buildManualThreadSaveStorageOptions(boardKey, page.threadId))
                     }
                     message = result.fold({ completeCompatThreadSave(it, fs, location) }, { it.message ?: "保存できませんでした" })
@@ -75,7 +79,8 @@ internal fun FutachaPageSaveDialog(features: FutachaSharedFeatures, page: Thread
                     job = scope.launch {
                         try {
                             message = runFutachaMediaOnlySave(kind, page, boardKey, boardName, title, location,
-                                client, fs, mediaOnlyProgressFlow, onSaved = { savedSoFar = it })
+                                client, fs, mediaOnlyProgressFlow, onSaved = { savedSoFar = it },
+                                includeNewsImages = com.valoser.futacha.shared.compat.isAimogeNewsBoard(boardUrl))
                         } catch (cancelled: CancellationException) {
                             // As としあき(仮) says it: what was saved before the cancel stays, and is counted (L74).
                             message = com.valoser.futacha.shared.ui.compat.compatThreadSaveCancellationMessage(savedSoFar)

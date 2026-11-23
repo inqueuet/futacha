@@ -46,7 +46,7 @@ internal sealed interface ArchiveSearchState {
 
 internal const val DEFAULT_CATALOG_GRID_COLUMNS = 5
 internal const val MIN_CATALOG_GRID_COLUMNS = 2
-internal const val MAX_CATALOG_GRID_COLUMNS = 8
+internal const val MAX_CATALOG_GRID_COLUMNS = 12
 
 /**
  * The columns a grid draws. The MIX takes the column count of the mode it is opened from, whose own range is wider

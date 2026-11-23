@@ -65,7 +65,8 @@ internal data class ThreadScreenReadAloudCallbacks(
     val scrollToPostIndex: suspend (Int) -> Unit,
     val speakText: suspend (String) -> Unit,
     val cancelActiveReadAloud: () -> Unit,
-    val interruptActiveReadAloud: () -> Unit = cancelActiveReadAloud
+    val interruptActiveReadAloud: () -> Unit = cancelActiveReadAloud,
+    val hintNextText: (String?) -> Unit = {}
 )
 
 internal data class ThreadScreenReadAloudDependencies(
@@ -172,6 +173,7 @@ internal fun buildThreadScreenReadAloudBindings(
                         },
                         scrollToPostIndex = callbacks.scrollToPostIndex,
                         speakText = callbacks.speakText,
+                        hintNextText = callbacks.hintNextText,
                         onFailure = { error ->
                             AnalyticsTracker.event(
                                 "read_aloud_error",

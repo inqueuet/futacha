@@ -253,4 +253,64 @@ class CompatArchiveThreadFetcherTest {
             client.close()
         }
     }
+
+    @Test
+    fun forestArchiveImagesResolveAgainstTheArchivePageNotTheFallenOriginal() = runBlocking {
+        // may 1449174385: an archive copy kept the original canonical link, so the OP's
+        // relative picture pointed at the fallen Futaba thread and never loaded.
+        val html = """
+            <html><head><link rel="canonical" href="$sourceUrl"></head><body>
+              <span id="tit">board</span>
+              <span class="thre" data-res="123">
+                <span class="cnw">26/08/08 00:00:00 ID:ABC</span>
+                <span class="cno">No.123</span>
+                <a href="img/op.jpg"><img src="thumb/op.jpg"></a>
+                <blockquote>op</blockquote>
+              </span>
+            </body></html>
+        """.trimIndent()
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler { respond(html, HttpStatusCode.OK, headersOf("Content-Type", "text/html; charset=UTF-8")) }
+            }
+        }
+        try {
+            val page = fetchCompatArchiveThreadPage(client, "https://futabaforest.net/may/b/123/index.htm")
+            assertEquals("https://futabaforest.net/may/b/123/img/op.jpg", page.posts.first().imageUrl)
+            assertEquals("https://futabaforest.net/may/b/123/thumb/op.jpg", page.posts.first().thumbnailUrl)
+        } finally {
+            client.close()
+        }
+    }
+
+    @Test
+    fun aLocalPostWithoutItsPictureTakesTheArchivesPicture() {
+        val local = ThreadPage(
+            threadId = "123", boardTitle = "板", expiresAtLabel = null, deletedNotice = null,
+            posts = listOf(post("123", 0, "local op"), post("124", 1, "deleted").copy(isDeleted = true))
+        )
+        val archive = local.copy(posts = listOf(
+            post("123", 0, "archive op").copy(imageUrl = "https://a.example/img/1.jpg", thumbnailUrl = "https://a.example/thumb/1.jpg"),
+            post("124", 1, "archive").copy(imageUrl = "https://a.example/img/2.jpg", thumbnailUrl = "https://a.example/thumb/2.jpg")
+        ))
+        val merged = mergeCompatThreadPages(local, listOf(archive))
+        val op = merged.posts.first()
+        assertEquals("local op", op.messageHtml)
+        assertEquals("https://a.example/img/1.jpg", op.imageUrl)
+        assertEquals("https://a.example/thumb/1.jpg", op.thumbnailUrl)
+        // A post the live board deleted keeps no picture.
+        assertEquals(null, merged.posts[1].imageUrl)
+    }
+
+    @Test
+    fun aLocalPictureIsKeptOverTheArchives() {
+        val local = ThreadPage(
+            threadId = "123", boardTitle = "板", expiresAtLabel = null, deletedNotice = null,
+            posts = listOf(post("123", 0, "op").copy(imageUrl = "local/img.jpg", thumbnailUrl = "local/thumb.jpg"))
+        )
+        val archive = local.copy(posts = listOf(post("123", 0, "op").copy(imageUrl = "a/img.jpg", thumbnailUrl = "a/thumb.jpg")))
+        val merged = mergeCompatThreadPages(local, listOf(archive))
+        assertEquals("local/img.jpg", merged.posts.first().imageUrl)
+        assertEquals("local/thumb.jpg", merged.posts.first().thumbnailUrl)
+    }
 }

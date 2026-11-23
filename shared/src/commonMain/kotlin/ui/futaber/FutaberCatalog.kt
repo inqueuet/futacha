@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.futaber
 
+import com.valoser.futacha.shared.compat.isAimogeNewsBoard
 import com.valoser.futacha.shared.ui.util.ScrollableToolbarRow
 
 import androidx.compose.foundation.background
@@ -292,6 +293,7 @@ internal fun FutaberCatalogScreen(
         try {
             collectCompatImagePhashes(
                 client, missing,
+                continueAfterBudget = true,
                 cachedImageLoader = cachedImageLoader,
                 fallbackImageUrl = { id -> load.items.firstOrNull { it.id == id }?.thumbnailUrl },
                 resolveMissingUrl = { id -> com.valoser.futacha.shared.ui.compat.resolveCompatCatalogPhashUrl(load.items.firstOrNull { it.id == id }?.thumbnailUrl) {
@@ -768,6 +770,7 @@ private fun FutaberGridCell(
             CatalogPreviewImage(
                 thumbnailUrl = item.thumbnailUrl,
                 fullImageUrl = item.fullImageUrl,
+                rewriteThumbnailPath = !isAimogeNewsBoard(item.threadUrl),
                 targetSizePx = 250,
                 contentDescription = "",
                 modifier = Modifier.fillMaxWidth().aspectRatio(1f).background(colors.fill),
@@ -828,6 +831,7 @@ private fun FutaberRowCell(
             CatalogPreviewImage(
                 thumbnailUrl = item.thumbnailUrl,
                 fullImageUrl = item.fullImageUrl,
+                rewriteThumbnailPath = !isAimogeNewsBoard(item.threadUrl),
                 targetSizePx = 250,
                 contentDescription = "",
                 modifier = Modifier.fillMaxSize(),

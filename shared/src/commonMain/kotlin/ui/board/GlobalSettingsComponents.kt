@@ -615,7 +615,7 @@ internal fun GlobalSettingsDisplaySection(
             headlineContent = { Text("コンパクトヘッダー") },
             supportingContent = {
                 Text(
-                    text = "スレ上部のバーを低くし、レスのヘッダー情報を詰めて表示します。狭い画面では折り返します。通常表示・ツリー表示・引用プレビューに反映されます。",
+                    text = "スレ上部のバーを低くし、レスのヘッダー情報を詰めて表示します。狭い画面では折り返します。通常表示・ツリー表示・引用プレビューに反映されます。カタログでも上のバーを低くし、下のバーはアイコンだけにします。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

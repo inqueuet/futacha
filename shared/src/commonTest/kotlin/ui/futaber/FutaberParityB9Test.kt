@@ -47,14 +47,21 @@ class FutaberParityB9Test {
         }
         assertEquals(1, fine.gridTitleLines)
         assertEquals("長い題名のスレッド", futaberGridTitle("長い題名のスレッド", fine))
-        // Values stored while the extension is off are not read.
+        // Values stored while the extension is switched off are not read.
         val stored = mapOf(
+            FutaberSettingKeys.EXT_CATALOG_FINE_TUNE to "OFF",
             FutaberCatalogFineKeys.gridColumns(FutaberCatalogDisplayStyle.Grid4) to "2",
             FutaberCatalogFineKeys.GRID_TITLE_LINES to "3",
             FutaberCatalogFineKeys.GRID_TITLE_CHARS to "0"
         )
         assertEquals(FutaberCatalogFineTune(), FutaberCatalogFineTune.from(stored))
         assertEquals(4, futaberCatalogColumns(FutaberCatalogDisplayStyle.Grid4, FutaberDisplaySettings.from(stored).catalogFine))
+    }
+
+    // may 1449259824: the settings screen offers the rows while the switch was never touched; the grid must use them.
+    @Test fun valuesSetWithTheSwitchNeverTouchedAreUsed() {
+        val stored = mapOf(FutaberCatalogFineKeys.gridColumns(FutaberCatalogDisplayStyle.Grid4) to "2")
+        assertEquals(2, futaberCatalogColumns(FutaberCatalogDisplayStyle.Grid4, FutaberCatalogFineTune.from(stored)))
     }
 
     @Test fun theStoredValuesChangeOnlyTheirOwnGridStyle() {

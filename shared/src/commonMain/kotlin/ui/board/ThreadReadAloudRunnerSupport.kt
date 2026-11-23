@@ -9,6 +9,8 @@ internal data class ThreadReadAloudRunnerCallbacks(
     val onSegmentStart: (ReadAloudSegment, Int) -> Unit = { _, _ -> },
     val scrollToSegment: suspend (ReadAloudSegment) -> Unit = {},
     val speakSegment: suspend (ReadAloudSegment) -> Unit,
+    /** The segment read after the one about to be spoken (null at the end), told before it is spoken. */
+    val hintNextSegment: (ReadAloudSegment?) -> Unit = {},
     val onFailure: suspend (Throwable) -> Unit = {}
 )
 
@@ -26,7 +28,8 @@ internal fun buildThreadReadAloudRunnerCallbacks(
     onSegmentStart: (ReadAloudSegment, Int) -> Unit,
     scrollToPostIndex: suspend (Int) -> Unit,
     speakText: suspend (String) -> Unit,
-    onFailure: suspend (Throwable) -> Unit
+    onFailure: suspend (Throwable) -> Unit,
+    hintNextText: (String?) -> Unit = {}
 ): ThreadReadAloudRunnerCallbacks {
     return ThreadReadAloudRunnerCallbacks(
         onSegmentStart = onSegmentStart,
@@ -36,6 +39,7 @@ internal fun buildThreadReadAloudRunnerCallbacks(
         speakSegment = { segment ->
             speakText(segment.body)
         },
+        hintNextSegment = { next -> hintNextText(next?.body) },
         onFailure = onFailure
     )
 }
@@ -81,6 +85,7 @@ internal suspend fun runThreadReadAloudSession(
                 currentCoroutineContext().ensureActive()
                 if (error is TimeoutCancellationException) throw error
             }
+            callbacks.hintNextSegment(segments.getOrNull(index + 1))
             callbacks.speakSegment(segment)
             val refreshed = latestSegments?.invoke()
             if (refreshed == null || refreshed === segments) {

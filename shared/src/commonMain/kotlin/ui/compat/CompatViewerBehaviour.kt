@@ -8,6 +8,25 @@ import com.valoser.futacha.shared.ui.board.platformVideoAutoPlayByDefault
 internal const val COMPAT_VIEWER_TAP_TOOLBAR_KEY = "viewerTapToolbar"
 internal const val COMPAT_VIEWER_VIDEO_AUTO_HIDE_KEY = "viewerVideoControlAutoHide"
 internal const val COMPAT_VIEWER_VIDEO_AUTO_PLAY_KEY = "viewerVideoAutoPlay"
+/**
+ * may 1449285572: what a video does at its end. Unsaved keeps each mode's own (としあき(仮) plays it over and over,
+ * ふたちゃ stops); "loop" repeats it and "stop" stops at the end with the panel shown, in both.
+ */
+internal const val COMPAT_VIEWER_VIDEO_END_KEY = "viewerVideoEnd"
+internal const val COMPAT_VIEWER_VIDEO_END_DEFAULT_LABEL = "モードの既定"
+internal val COMPAT_VIEWER_VIDEO_END_OPTIONS = listOf(COMPAT_VIEWER_VIDEO_END_DEFAULT_LABEL, "繰り返す", "1回で止める")
+
+internal fun compatViewerVideoEndStored(label: String): String = when (label) {
+    "繰り返す", "loop" -> "loop"
+    "1回で止める", "stop" -> "stop"
+    else -> ""
+}
+
+internal fun compatViewerVideoEndLabel(stored: String): String = when (stored) {
+    "loop", "繰り返す" -> "繰り返す"
+    "stop", "1回で止める" -> "1回で止める"
+    else -> COMPAT_VIEWER_VIDEO_END_DEFAULT_LABEL
+}
 
 /** 18-20 hides the playing video's panel after 3.5 seconds when 「自動で隠す」 is ON. */
 internal const val COMPAT_VIEWER_VIDEO_AUTO_HIDE_MILLIS = 3_500
@@ -42,7 +61,11 @@ internal fun compatViewerBehaviour(
                 else -> autoPlayByDefault
             },
             // reference app (18-10b and 18-20) plays a video over and over.
-            loop = reference,
+            loop = when (compatViewerVideoEndStored(value(COMPAT_VIEWER_VIDEO_END_KEY).orEmpty())) {
+                "loop" -> true
+                "stop" -> false
+                else -> reference
+            },
             // 18-20's default OFF keeps the panel until a tap; 0 means "never hide" to the player.
             controlsAutoHideMillis = when {
                 autoHide == "ON" -> COMPAT_VIEWER_VIDEO_AUTO_HIDE_MILLIS
